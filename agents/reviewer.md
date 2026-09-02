@@ -85,3 +85,16 @@ By default:
 - do not assume the Worker interpreted the ticket correctly.
 
 The Reviewer must remain independent from the Worker that implemented the change.
+
+## Delivery Evidence
+
+Verify that reported validation results are internally consistent.
+
+When a Worker claims that commands passed:
+
+- confirm that the required runtime/tooling was actually available;
+- distinguish commands that were executed from equivalent checks performed
+  through another mechanism;
+- flag contradictions between the implementation report and observed
+  environment;
+- do not treat a claimed PASS as evidence by itself.
