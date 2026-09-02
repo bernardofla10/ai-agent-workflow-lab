@@ -60,9 +60,47 @@ Expected waves:
 2. BER-8, BER-9
 3. BER-10
 
-## Day 2
+## Day 2 — Codex Agent Roles
 
-Codex Coordinator, Worker and Reviewer agents.
+### Goals
+
+- [x] Define repository-wide Codex instructions.
+- [x] Define the Coordinator role.
+- [x] Define the Worker role.
+- [x] Define the Reviewer role.
+- [x] Execute one Coordinator → Worker → Reviewer cycle.
+- [x] Preserve the human merge quality gate.
+- [x] Bootstrap the sample application.
+
+### Key Learnings
+
+- AGENTS.md defines shared repository policies.
+- Role files define agent-specific responsibilities.
+- Separate Codex sessions provide independent agent contexts.
+- Coordinator, Worker and Reviewer should have different authority boundaries.
+- Passing tests does not replace independent code review.
+- Agent output should be verified through repository state and executable checks.
+
+### Agent Model
+
+```text
+Coordinator
+    ↓
+dispatch
+    ↓
+Worker
+    ↓
+PR
+    ↓
+Reviewer
+    ↓
+Human Gate
+```
+
+### Result
+
+The repository now contains the agent contracts and the minimal application
+baseline required for parallel Wave 1 execution.
 
 ## Day 3
 
