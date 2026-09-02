@@ -119,14 +119,14 @@ Never:
 ## Instruction Conflicts
 
 If the work item, repository instructions and dispatch instructions contradict
-each other in a way that changes the requested implementation scope:
+each other in a way that changes implementation scope:
 
 1. stop before editing;
-2. identify the conflicting instructions explicitly;
+2. identify the conflicting instructions;
 3. report the blocker;
-4. request clarification from the Coordinator or human maintainer.
+4. request clarification.
 
 Do not silently choose one conflicting instruction.
 
-When clarification is provided, continue from the existing worktree unless
-repository state makes that unsafe.
+After clarification, continue from the existing worktree unless repository
+state makes doing so unsafe.
