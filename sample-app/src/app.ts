@@ -14,3 +14,11 @@ app.get('/', (_request, response) => {
     status: 'running',
   });
 });
+
+app.get('/health', (_request, response) => {
+  response.json({ status: 'ok' });
+});
+
+app.get('/ready', (_request, response) => {
+  response.json({ status: 'ready' });
+});
