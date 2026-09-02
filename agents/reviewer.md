@@ -107,9 +107,12 @@ verifiable evidence.
 Acceptable evidence includes:
 
 - successful CI checks for the reviewed Pull Request head; or
-- independent execution of the required validation commands by the Reviewer.
+- independent execution of all required validation commands.
 
-A Worker's reported PASS result alone is not sufficient evidence.
+A Worker's reported PASS result alone is not sufficient.
 
-If implementation review finds no defects but required validation cannot be
-independently verified, return BLOCK and explain the missing evidence.
+If the code review finds no defects but required validation cannot be
+independently verified, return BLOCK and describe the missing evidence.
+
+Review criteria must be derived from the current ticket. Do not apply
+ticket-specific requirements from unrelated work items.

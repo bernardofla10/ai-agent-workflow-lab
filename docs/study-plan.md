@@ -104,7 +104,64 @@ baseline required for parallel Wave 1 execution.
 
 ## Day 3
 
-Parallel Codex execution using Git worktrees.
+## Day 3 — Parallel Codex Workers and Wave Execution
+
+### Goals
+
+- [x] Calculate the first execution wave.
+- [x] Create three isolated Git worktrees.
+- [x] Run three Codex Workers in parallel.
+- [x] Produce one Pull Request per ticket.
+- [x] Run independent Codex Reviewers.
+- [x] Add independent GitHub Actions validation.
+- [x] Preserve the human merge gate.
+- [x] Sequentially integrate all Wave 1 changes.
+- [x] Recalculate readiness after integration.
+
+### Completed Work
+
+- BER-5 — Structured request logging
+- BER-6 — Request correlation IDs
+- BER-7 — Health and readiness endpoints
+
+### Harness Problems Discovered
+
+1. Contradictory Worker dispatch instructions.
+2. Ticket-specific review criteria leaking into unrelated reviews.
+3. Worker validation claims lacked independent evidence.
+4. Linear dependency completion alone was insufficient to guarantee runtime
+   readiness.
+
+### Improvements
+
+- Workers fail closed on instruction conflicts.
+- Reviewer context should be generated from the current ticket.
+- GitHub Actions now supplies independent validation evidence.
+- Coordinator readiness checks include repository-state validation.
+
+### Key Learning
+
+The orchestration layer itself is software and can contain bugs.
+
+Agentic engineering requires testing and hardening not only application code,
+but also:
+
+- prompts;
+- role boundaries;
+- dispatch logic;
+- context construction;
+- evidence collection;
+- readiness calculation.
+
+### Final State
+
+Wave 1 is integrated into `main`.
+
+BER-9 is ready.
+
+BER-8 requires one contract clarification before dispatch.
+
+BER-10 remains blocked.
 
 ## Day 4
 

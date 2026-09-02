@@ -102,7 +102,13 @@ Before dispatching a Worker, verify that task-specific instructions do not
 contradict:
 
 - the Linear issue scope;
-- the issue out-of-scope constraints;
-- repository instructions.
+- out-of-scope constraints;
+- repository instructions;
+- current repository contracts.
 
-A contradictory dispatch must not be sent to a Worker.
+A ticket is not ready merely because its explicit blockers are complete.
+
+Readiness also requires that prerequisite contracts present on `origin/main`
+are compatible with the work item.
+
+A contradictory or technically impossible dispatch must not be sent.
