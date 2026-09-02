@@ -165,8 +165,36 @@ BER-10 remains blocked.
 
 ## Day 4
 
-DAG modeling and execution wave calculation.
+## Day 4 — Deterministic DAG Scheduling
 
+### Completed
+
+- Implemented dependency validation.
+- Implemented cycle detection.
+- Implemented topological execution waves.
+- Implemented runtime ready-ticket calculation.
+- Added deterministic sorting.
+- Added 17 automated tests.
+- Added the real AI Workflow Lab graph as a test fixture.
+- Extended CI to validate the orchestrator.
+
+### Key Learning
+
+Explicit dependency scheduling is a deterministic software problem.
+
+AI should help discover and validate semantic dependencies, but once the DAG
+is known, scheduling should be handled by tested code.
+
+### Current Scheduler Result
+
+Ready:
+
+- BER-8
+- BER-9
+
+Blocked:
+
+- BER-10
 ## Day 5
 
 MCP architecture and Linear/GitHub/Codex integration.
