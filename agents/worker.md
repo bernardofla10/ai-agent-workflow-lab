@@ -115,3 +115,18 @@ Never:
 - modify another ticket's scope;
 - hide failing tests;
 - claim success when required validation is failing.
+
+## Instruction Conflicts
+
+If the work item, repository instructions and dispatch instructions contradict
+each other in a way that changes the requested implementation scope:
+
+1. stop before editing;
+2. identify the conflicting instructions explicitly;
+3. report the blocker;
+4. request clarification from the Coordinator or human maintainer.
+
+Do not silently choose one conflicting instruction.
+
+When clarification is provided, continue from the existing worktree unless
+repository state makes that unsafe.

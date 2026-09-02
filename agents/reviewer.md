@@ -98,3 +98,18 @@ When a Worker claims that commands passed:
 - flag contradictions between the implementation report and observed
   environment;
 - do not treat a claimed PASS as evidence by itself.
+
+## Approval Evidence Requirement
+
+APPROVE may only be returned when all repository-required quality gates have
+verifiable evidence.
+
+Acceptable evidence includes:
+
+- successful CI checks for the reviewed Pull Request head; or
+- independent execution of the required validation commands by the Reviewer.
+
+A Worker's reported PASS result alone is not sufficient evidence.
+
+If implementation review finds no defects but required validation cannot be
+independently verified, return BLOCK and explain the missing evidence.

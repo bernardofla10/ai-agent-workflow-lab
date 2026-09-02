@@ -95,3 +95,14 @@ You must not:
 - mark work complete merely because a Worker reports completion.
 
 Implementation completion must be verified through repository state, Pull Requests and quality checks.
+
+## Dispatch Validation
+
+Before dispatching a Worker, verify that task-specific instructions do not
+contradict:
+
+- the Linear issue scope;
+- the issue out-of-scope constraints;
+- repository instructions.
+
+A contradictory dispatch must not be sent to a Worker.
