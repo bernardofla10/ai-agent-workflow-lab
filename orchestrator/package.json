@@ -1,6 +1,7 @@
 {
   "type": "module",
   "scripts": {
+    "mcp": "tsx src/mcp/index.ts",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
@@ -14,5 +15,10 @@
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.69.0",
     "vitest": "^3.2.7"
+  },
+  "dependencies": {
+    "@linear/sdk": "^94.0.0",
+    "@modelcontextprotocol/server": "^2.0.0",
+    "zod": "^4.6.0"
   }
 }
