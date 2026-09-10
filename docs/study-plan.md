@@ -195,9 +195,32 @@ Ready:
 Blocked:
 
 - BER-10
-## Day 5
+## Day 5 — MCP + External Integrations
 
-MCP architecture and Linear/GitHub/Codex integration.
+### Completed
+
+- Integrated Linear through a read-only provider.
+- Integrated GitHub through a read-only adapter.
+- Reused the deterministic scheduler through WorkflowService.
+- Exposed workflow capabilities via MCP.
+- Added read-only tools:
+  - get_project_graph
+  - get_ready_tickets
+  - get_execution_waves
+  - get_pull_request_status
+- Validated BER-8 and BER-9 as ready using real Linear state.
+- Validated PR state using real GitHub state.
+
+### Key learning
+
+The LLM should consume deterministic workflow capabilities through tools,
+instead of recomputing dependency logic from raw issue text.
+
+### Current live result
+
+Ready:
+- BER-8
+- BER-9
 
 ## Day 6
 
