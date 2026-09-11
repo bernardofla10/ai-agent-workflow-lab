@@ -12,6 +12,15 @@ export const runIdSchema = z.string().max(100).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$
 // Persist full object IDs, never an abbreviated hash or a moving ref.
 export const baseCommitSchema = z.string().regex(/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/);
 
+export const workerResultSchema = z.strictObject({
+  startedAt: z.iso.datetime(),
+  endedAt: z.iso.datetime(),
+  exitCode: z.number().int().min(0).max(255).nullable(),
+  signal: z.string().regex(/^SIG[A-Z0-9]+$/).nullable(),
+}).refine((result) => result.endedAt >= result.startedAt &&
+  ((result.exitCode === null) !== (result.signal === null)), "Invalid Worker process result");
+export type WorkerResult = z.infer<typeof workerResultSchema>;
+
 export const workerAssignmentSchema = z.strictObject({
   ticketId: ticketIdSchema,
   status: executionStatusSchema,
@@ -22,6 +31,7 @@ export const workerAssignmentSchema = z.strictObject({
   ciState: z.enum(["success", "failure", "pending", "none", "unknown"]).optional(),
   reviewerVerdict: z.enum(["APPROVE", "REQUEST_CHANGES", "BLOCK"]).optional(),
   error: z.string().min(1).optional(),
+  workerResult: workerResultSchema.optional(),
 });
 export type WorkerAssignment = z.infer<typeof workerAssignmentSchema>;
 
