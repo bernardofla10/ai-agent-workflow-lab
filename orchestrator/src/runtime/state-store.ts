@@ -59,6 +59,21 @@ export class StateStore {
     return this.locked(() => this.readRuns());
   }
 
+  // Separate from the short state-file lock: held until all dispatched processes
+  // settle. A process interruption leaves this lock for manual inspection.
+  async withDispatchLock<T>(operation: () => Promise<T>): Promise<T> {
+    await this.ensureDirectory(this.runtimeDirectory);
+    const path = join(this.runtimeDirectory, "dispatch.lock");
+    let lock;
+    try { lock = await open(path, "wx", 0o600); } catch {
+      throw new Error("Dispatch locked or inaccessible; inspect before dispatching");
+    }
+    try { return await operation(); } finally {
+      await lock.close();
+      await unlink(path);
+    }
+  }
+
   async load(id: string): Promise<ExecutionRun> {
     runIdSchema.parse(id);
     const run = (await this.loadAll()).find((run) => run.id === id);
@@ -83,7 +98,8 @@ export class StateStore {
         for (const old of current.assignments) {
           const next = run.assignments.find((assignment) => assignment.ticketId === old.ticketId);
           if (!next || next.branch !== old.branch || next.worktreePath !== old.worktreePath ||
-            (old.status === "merged" && next.status !== "merged")) {
+            (old.status === "merged" && next.status !== "merged") ||
+            (old.status !== "planned" && next.status === "planned")) {
             throw new Error("Cannot remove, reroute or reactivate an assignment");
           }
         }
