@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { githubRepository } from "../config/environment.js";
+import { githubRepository, loadRuntimeEnvironment } from "../config/environment.js";
 import { workflowFromEnvironment } from "../config/workflow.js";
 import { CoordinatorRunner } from "../dispatch/coordinator-runner.js";
 import { DispatchExecutor } from "../dispatch/dispatch-executor.js";
@@ -15,6 +15,7 @@ import { executeCommand, parseCommand } from "./runtime-cli.js";
 try {
   const input = parseCommand(process.argv.slice(2));
   const root = resolve(input.values.root ?? fileURLToPath(new URL("../../../", import.meta.url)));
+  loadRuntimeEnvironment(root);
   const concurrency = maxConcurrencyFromEnvironment();
   const store = new StateStore(root, concurrency);
   const executor = new DispatchExecutor(root, undefined, concurrency);

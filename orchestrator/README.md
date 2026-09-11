@@ -36,9 +36,10 @@ Set these environment variables in the process launching the MCP server:
 | `GITHUB_REPOSITORY` | GitHub repository in `owner/repository` format. |
 
 `.env.example` contains only empty variable assignments. No credentials or project
-values are embedded in code. A local `.env` is ignored by Git and is **not loaded
-automatically**: export the variables or arrange environment loading in the
-launcher. Never put credentials in tracked configuration.
+values are embedded in code. A local `.env` is ignored by Git. The MCP server does
+not load it automatically: export variables or arrange environment loading in
+its launcher. The runtime CLI loads local files as described below. Never put
+credentials in tracked configuration.
 
 To load the local `.env` explicitly at startup, run from `orchestrator/`:
 
@@ -381,23 +382,17 @@ produces JSON without npm banners.
 
 `orchestrator` is an alias for the same CLI: `npm run orchestrator -- plan`.
 
-`plan` reads live Linear through the existing deterministic scheduler and uses
-`git ls-remote --exit-code origin refs/heads/main` to inspect the current main SHA
-without fetching or writing local Git state. It reports candidates, capacity,
-intended assignments and `preflightRequired: true`, without saving or starting
-Codex. `dispatch --dry-run` without an ID builds a fresh ephemeral plan and
-reports its assignments, `wouldStart`, `persisted: false`, and the required
-preflight. These separate snapshots can differ if Linear or remote main changes.
+Both CLI aliases automatically load `<root>/.env`, then fill missing variables
+from `<root>/orchestrator/.env`. Exported environment variables take precedence,
+followed by the root file. Missing files are allowed; unreadable files fail
+without logging their contents. Paths follow `--root` (or the default repository
+root), not the caller's cwd. Files use Node's dotenv parser, not shell evaluation.
+For `plan`, configure both `LINEAR_API_KEY` and `LINEAR_PROJECT_ID`.
 
-`plan --persist` explicitly fetches main and resolves
-`refs/remotes/origin/main^{commit}` once for the entire wave. It saves planned
-assignments under ignored `.ai-workflow/runs/`, reserves capacity, and returns an
-`approvalTemplate`; it creates no execution branches/worktrees and launches no
-Codex. An omitted run ID is generated and returned. Existing run IDs are never
-overwritten. Use the persisted ID for subsequent commands.
-
-After semantic inspection of the live issues, copy the persisted plan's exact
-`approvalTemplate` into a JSON file and select the allowed subset:
+`plan` reads live Linear through the existing deterministic scheduler and fetches
+the exact `refs/remotes/origin/main` base. By default it only reports candidates,
+capacity and intended assignments, including a manual approval template. It
+does not save state or start Codex. Manual approval is an explicit JSON file:
 
 ```json
 {
