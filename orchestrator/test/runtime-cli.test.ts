@@ -199,15 +199,14 @@ describe("runtime CLI", () => {
     expect(await readdir(outside)).toEqual([]);
   });
 
-  it("real CLI entrypoint supports status/help outside cwd without credentials", async () => {
+  it.each(["runtime", "orchestrator"])("npm %s entrypoint forwards status/help outside cwd without credentials", async (script) => {
     const env = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
       !["LINEAR_API_KEY", "LINEAR_PROJECT_ID", "GITHUB_REPOSITORY", "MAX_CONCURRENCY"].includes(key)));
-    const cli = resolve("src/cli/index.ts");
-    const tsx = resolve("node_modules/tsx/dist/cli.mjs");
-    const { stdout } = await promisify(execFile)(process.execPath,
-      [tsx, cli, "status", "--root", repo.repositoryRoot], { cwd: repo.root, env });
+    const args = ["--prefix", resolve("."), "run", "--silent", script, "--"];
+    const { stdout } = await promisify(execFile)("npm",
+      [...args, "status", "--root", repo.repositoryRoot], { cwd: repo.root, env });
     expect(JSON.parse(stdout)).toEqual([]);
-    const help = await promisify(execFile)(process.execPath, [tsx, cli, "--help"], { cwd: repo.root, env });
+    const help = await promisify(execFile)("npm", [...args, "--help"], { cwd: repo.root, env });
     expect(help.stdout).toContain("dispatch --run-id ID [--dry-run]");
     await expect(lstat(join(repo.repositoryRoot, ".ai-workflow"))).rejects.toMatchObject({ code: "ENOENT" });
   });
