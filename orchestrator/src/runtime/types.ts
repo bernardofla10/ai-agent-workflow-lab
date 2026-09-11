@@ -45,6 +45,7 @@ export const supervisionSchema = z.strictObject({
   mergedBy: z.string().min(1).optional(),
 });
 export const preflightSchema = z.strictObject({
+  runId: runIdSchema.optional(),
   kind: z.enum(["manual", "codex"]),
   baseCommit: baseCommitSchema,
   candidates: z.array(ticketIdSchema),

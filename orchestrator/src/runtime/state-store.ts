@@ -125,9 +125,16 @@ export class StateStore {
       const current = runs.find((entry) => entry.id === run.id);
       if (JSON.stringify(current) !== JSON.stringify(previous)) throw new Error("Stale or existing run; reload before saving");
       if (current) {
-        const metadata = (entry: ExecutionRun) => ({ ...entry, assignments: [] });
+        const metadata = (entry: ExecutionRun) => ({ ...entry, assignments: [], preflight: undefined });
         if (JSON.stringify(metadata(current)) !== JSON.stringify(metadata(run))) {
           throw new Error("Run metadata and wave base are immutable");
+        }
+        if (JSON.stringify(current.preflight) !== JSON.stringify(run.preflight)) {
+          if (current.preflight || !run.preflight) throw new Error("Recorded preflight is immutable");
+          if (run.preflight.runId !== run.id || current.assignments.some((assignment) => assignment.status !== "planned") ||
+            JSON.stringify(current.assignments) !== JSON.stringify(run.assignments)) {
+            throw new Error("Preflight must bind the unchanged planned run and its exact base");
+          }
         }
         for (const old of current.assignments) {
           const next = run.assignments.find((assignment) => assignment.ticketId === old.ticketId);

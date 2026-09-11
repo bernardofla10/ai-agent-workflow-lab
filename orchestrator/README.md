@@ -360,22 +360,25 @@ existing `WorkflowService.getReadyTickets()` deterministic scheduler.
 Run from `orchestrator/` (or use `npm --prefix /path/to/orchestrator ...`):
 
 ```bash
-npm run runtime -- plan --run-id run-example
-npm run runtime -- plan --run-id run-example --approval-file /absolute/path/approval.json
-# Alternatively request an automated semantic preflight explicitly:
-npm run runtime -- plan --run-id run-example --coordinator codex
-npm run runtime -- dispatch --run-id run-example --dry-run
-npm run runtime -- dispatch --run-id run-example
-npm run runtime -- status
-npm run runtime -- status --run-id run-example
-npm run runtime -- supervise --run-id run-example
+npm run orchestrator -- plan
+npm run orchestrator -- dispatch --dry-run
+npm run orchestrator -- plan --persist --run-id run-example
+# Inspect the persisted plan and prepare manual semantic approval (see below).
+npm run orchestrator -- preflight --run-id run-example --approval-file /absolute/path/approval.json
+npm run orchestrator -- dispatch --run-id run-example --dry-run
+# Only after inspecting the approved dry-run, explicitly start real Workers:
+npm run orchestrator -- dispatch --run-id run-example
+npm run orchestrator -- status --run-id run-example
+npm run orchestrator -- supervise --run-id run-example
 ```
 
 All commands accept `--root /absolute/path/to/canonical/repository`. The default
 is this repository root, independent of the caller's cwd. `MAX_CONCURRENCY`
 defaults to two and must be a positive integer. Credentials are resolved only
-for operations that need them; `status` and dry-run need no Linear/GitHub/Codex
-credentials. `npm run --silent runtime -- ...` produces JSON without npm banners.
+for operations that need them; `status`, manual `preflight`, and persisted-run
+dry-run need no Linear/GitHub/Codex credentials. Ephemeral planning/dry-run need
+Linear and read access to the Git remote. `npm run --silent runtime -- ...`
+produces JSON without npm banners.
 
 `orchestrator` is an alias for the same CLI: `npm run orchestrator -- plan`.
 
@@ -393,24 +396,43 @@ does not save state or start Codex. Manual approval is an explicit JSON file:
 
 ```json
 {
-  "baseCommit": "<full SHA from plan>",
+  "runId": "run-example",
+  "baseCommit": "<full SHA from plan --persist>",
   "candidates": ["TEST-1", "TEST-2"],
   "allowed": ["TEST-1"]
 }
 ```
 
 Keep approval files under ignored `.ai-workflow/` or outside the repository.
-The approved plan re-reads Linear and fetches main; an outdated SHA or candidate
-snapshot rejects the approval. `allowed` may only remove deterministic candidates,
-including blocking all of them. Structured Coordinator output obeys the same
-check. Reservations and concurrency further restrict assignments. The persisted
-preflight is immutable. The CLI refuses dispatch of legacy plans without this
-authorization; it does not retrofit approvals into old runs.
+`preflight --run-id ... --approval-file ...` records approval on that unchanged
+planned run, using a compare-and-save update. It does not replan or fetch a new
+base. Wrong run IDs, base SHAs, candidate snapshots, duplicate allowed IDs and
+non-candidates are rejected. Approval can only remove candidates and is immutable
+once recorded. Empty approval blocks execution: real dispatch rejects it.
+Existing unapproved runs may be explicitly approved only while every assignment
+is still planned; there is no automatic approval or recovery.
+
+Approval preserves all original assignments and reservations. Rejected planned
+tickets remain reserved, but dispatch skips them. No cancellation or capacity
+reallocation is introduced. Approval does not create assignments for candidates
+that lacked capacity. Real dispatch requires persisted approval, launches only
+approved planned assignments, and retains duplicate, concurrency and exact-base
+checks. Advancing remote main after approval does not change the wave's base.
+
+The existing explicit shortcuts `plan --coordinator codex` and
+`plan --approval-file FILE` remain available to create an approved run in one
+step. The latter retains its original `{baseCommit,candidates,allowed}` file
+format and validates it against a freshly fetched and scheduled snapshot.
+Only the explicit Coordinator shortcut launches semantic Codex preflight.
+Neither shortcut can be combined with `--persist`.
 
 Dry-run shares WorktreeManager's read-only preparation checks and reports each
 assignment's start/skip/block action, exact SHA, branch, cwd and Worker prompt.
-It creates no directories, state files, locks, branches, worktrees or processes
-other than read-only Git inspection. It does not fetch or contact integrations.
+It creates no directories, state files, locks, branches, worktrees or Codex
+processes. Persisted-run dry-run uses the approved stored snapshot and contacts
+no integrations. Ephemeral dry-run reads Linear and the remote main ref without
+fetching. If that commit's objects are absent locally, preparation is reported
+as blocked; `plan --persist` fetches the objects for a later persisted preview.
 Status reads existing JSON without creating lock files or runtime directories.
 Both fail closed on corrupt state or observed concurrent state writes. Dry-run
 also rejects an execution lock and over-limit reservations. These commands
