@@ -106,4 +106,31 @@ export class DispatchExecutor {
       ) };
     });
   }
+
+  async preview(runId: string) {
+    runIdSchema.parse(runId);
+    await this.worktrees.validateRepository();
+    const runs = await this.store.inspectAll();
+    await this.store.assertExecutionAvailable();
+    const run = runs.find((entry) => entry.id === runId);
+    if (!run) throw new Error("Persisted run not found");
+    if (runs.flatMap((entry) => entry.assignments.filter(reservesTicket)).length > this.limit) {
+      throw new Error("Existing reservations exceed MAX_CONCURRENCY; no Workers started");
+    }
+    const actions = [];
+    for (const assignment of run.assignments) {
+      if (assignment.status !== "planned") {
+        actions.push({ ticketId: assignment.ticketId, action: "skip", status: assignment.status });
+        continue;
+      }
+      try {
+        const cwd = await this.worktrees.check(assignment);
+        actions.push({ ticketId: assignment.ticketId, action: "start_worker", cwd,
+          baseCommit: assignment.baseCommit, branch: assignment.branch, prompt: this.prompts.build(assignment.ticketId) });
+      } catch {
+        actions.push({ ticketId: assignment.ticketId, action: "block", reason: "Worktree preparation failed" });
+      }
+    }
+    return { runId, baseCommit: run.baseCommit, concurrency: this.limit, actions };
+  }
 }

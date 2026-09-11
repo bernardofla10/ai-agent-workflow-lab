@@ -69,7 +69,7 @@ export class WorktreeManager {
     }
   }
 
-  async create(assignment: WorkerAssignment): Promise<string> {
+  async check(assignment: WorkerAssignment): Promise<string> {
     const path = this.path(assignment);
     if (assignment.status !== "planned") throw new Error("Only planned assignments may create a worktree");
     await this.validateRepository();
@@ -87,6 +87,12 @@ export class WorktreeManager {
     if (await this.command(["rev-parse", "--verify", `${assignment.baseCommit}^{commit}`]) !== assignment.baseCommit) {
       throw new Error("Persisted base must identify the exact commit");
     }
+    return path;
+  }
+
+  async create(assignment: WorkerAssignment): Promise<string> {
+    const path = await this.check(assignment);
+    const parent = dirname(path);
     try { await mkdir(parent); } catch (error) {
       if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
     }

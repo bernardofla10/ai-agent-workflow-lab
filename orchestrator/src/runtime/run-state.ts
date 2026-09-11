@@ -15,6 +15,15 @@ export function parseRun(value: unknown): ExecutionRun {
   unique(run.candidates, "candidate");
   unique(run.dispatchable, "dispatchable ticket");
   unique(run.assignments.map((assignment) => assignment.ticketId), "assignment");
+  if (run.preflight) {
+    unique(run.preflight.allowed, "Coordinator selection");
+    if (run.preflight.baseCommit !== run.baseCommit ||
+      JSON.stringify(run.preflight.candidates) !== JSON.stringify(run.candidates) ||
+      run.preflight.allowed.some((id) => !run.candidates.includes(id)) ||
+      run.dispatchable.some((id) => !run.preflight!.allowed.includes(id))) {
+      throw new Error("Coordinator preflight does not match the deterministic plan");
+    }
+  }
   for (const id of run.dispatchable) {
     if (!run.candidates.includes(id)) throw new Error("Dispatchable ticket is not a candidate");
   }
@@ -25,6 +34,37 @@ export function parseRun(value: unknown): ExecutionRun {
       throw new Error("Branch does not belong to ticket");
     }
     if (assignment.worktreePath !== worktreePath(assignment.ticketId)) throw new Error("Unsafe worktree path");
+    const evidence = assignment.supervision;
+    if (evidence) {
+      unique(evidence.reviewAttempts.map((attempt) => attempt.headCommit), "review attempt");
+      if (!assignment.pullRequest || (evidence.identity && evidence.identity.pullRequest !== assignment.pullRequest) ||
+        evidence.ciHeadCommit !== evidence.headCommit ||
+        (evidence.reviewHeadCommit && evidence.reviewHeadCommit !== evidence.headCommit)) {
+        throw new Error("Inconsistent supervision evidence");
+      }
+      for (const attempt of evidence.reviewAttempts) {
+        if ((attempt.state === "completed" && (!attempt.verdict || !attempt.reason)) ||
+          (["started", "failed"].includes(attempt.state) && attempt.verdict)) {
+          throw new Error("Inconsistent review attempt");
+        }
+      }
+      const currentAttempt = evidence.reviewAttempts.find((attempt) => attempt.headCommit === evidence.headCommit);
+      if ((assignment.reviewerVerdict && (evidence.reviewHeadCommit !== evidence.headCommit ||
+        assignment.ciState !== "success" || currentAttempt?.state !== "completed" ||
+        currentAttempt.verdict !== assignment.reviewerVerdict)) ||
+        (evidence.reviewHeadCommit && !assignment.reviewerVerdict) ||
+        (assignment.status === "reviewing" && (currentAttempt?.state !== "started" || assignment.ciState !== "success")) ||
+        (assignment.status === "changes_requested" && assignment.reviewerVerdict !== "REQUEST_CHANGES") ||
+        (assignment.status === "merged" && !evidence.mergedBy)) {
+        throw new Error("Runtime transition lacks matching supervision evidence");
+      }
+      if (assignment.status === "waiting_for_human" && (assignment.ciState !== "success" ||
+        assignment.reviewerVerdict !== "APPROVE" || evidence.reviewHeadCommit !== evidence.headCommit ||
+        !evidence.reviewAttempts.some((attempt) => attempt.headCommit === evidence.headCommit &&
+          attempt.state === "completed" && attempt.verdict === "APPROVE"))) {
+        throw new Error("Human gate requires current-head CI and review evidence");
+      }
+    }
   }
   return run;
 }

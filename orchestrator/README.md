@@ -1,8 +1,8 @@
-# Orchestrator MCP server
+# Orchestrator runtime and MCP server
 
-This repository-local work item connects the existing deterministic scheduler to
-read-only Linear and GitHub providers. It does not dispatch agents or change
-external state.
+The runtime connects the deterministic scheduler to persistent planning, local
+Worker dispatch and independent delivery supervision. The separate MCP server
+exposes read-only Linear/GitHub tools; it does not dispatch agents.
 
 ## Architecture
 
@@ -342,10 +342,142 @@ last recorded state; inspect and reconcile before further action.
 This implementation targets a trusted POSIX local filesystem and the canonical
 main checkout (a real `.git` directory). Linked worktrees cannot serve as the
 orchestrator root. Dispatch must use this executor and the same repository root;
-calling the low-level runner directly bypasses dispatch coordination. There is
-no PR discovery, CI monitoring, Reviewer execution, Linear write integration,
-automatic merge, or retry/recovery command. BER-8 and BER-9 were not dispatched
-during RUN-2 implementation.
+calling the low-level runner directly bypasses dispatch coordination. RUN-3 below
+adds PR/CI supervision and independent review. There is no Linear write
+integration, automatic merge, or retry/recovery command. BER-8 and BER-9 were not
+dispatched during implementation.
+
+## RUN-3: supervision and CLI
+
+`src/supervision/supervisor.ts` performs one finite supervision pass over a
+persisted run. `GitHubSupervisionAdapter` discovers PRs by assignment branch and
+reads typed GraphQL evidence; the existing MCP PR contract is unchanged.
+`ReviewerRunner` and `CoordinatorRunner` use fresh structured Codex processes.
+`src/cli/` wires these adapters to the RUN-1 store/planner, RUN-2 executor and
+existing `WorkflowService.getReadyTickets()` deterministic scheduler.
+
+Run from `orchestrator/` (or use `npm --prefix /path/to/orchestrator ...`):
+
+```bash
+npm run runtime -- plan --run-id run-example
+npm run runtime -- plan --run-id run-example --approval-file /absolute/path/approval.json
+# Alternatively request an automated semantic preflight explicitly:
+npm run runtime -- plan --run-id run-example --coordinator codex
+npm run runtime -- dispatch --run-id run-example --dry-run
+npm run runtime -- dispatch --run-id run-example
+npm run runtime -- status
+npm run runtime -- status --run-id run-example
+npm run runtime -- supervise --run-id run-example
+```
+
+All commands accept `--root /absolute/path/to/canonical/repository`. The default
+is this repository root, independent of the caller's cwd. `MAX_CONCURRENCY`
+defaults to two and must be a positive integer. Credentials are resolved only
+for operations that need them; `status` and dry-run need no Linear/GitHub/Codex
+credentials. `npm run --silent runtime -- ...` produces JSON without npm banners.
+
+`plan` reads live Linear through the existing deterministic scheduler and fetches
+the exact `refs/remotes/origin/main` base. By default it only reports candidates,
+capacity and intended assignments, including a manual approval template. It
+does not save state or start Codex. Manual approval is an explicit JSON file:
+
+```json
+{
+  "baseCommit": "<full SHA from plan>",
+  "candidates": ["TEST-1", "TEST-2"],
+  "allowed": ["TEST-1"]
+}
+```
+
+Keep approval files under ignored `.ai-workflow/` or outside the repository.
+The approved plan re-reads Linear and fetches main; an outdated SHA or candidate
+snapshot rejects the approval. `allowed` may only remove deterministic candidates,
+including blocking all of them. Structured Coordinator output obeys the same
+check. Reservations and concurrency further restrict assignments. The persisted
+preflight is immutable. The CLI refuses dispatch of legacy plans without this
+authorization; it does not retrofit approvals into old runs.
+
+Dry-run shares WorktreeManager's read-only preparation checks and reports each
+assignment's start/skip/block action, exact SHA, branch, cwd and Worker prompt.
+It creates no directories, state files, locks, branches, worktrees or processes
+other than read-only Git inspection. It does not fetch or contact integrations.
+Status reads existing JSON without creating lock files or runtime directories.
+Both fail closed on corrupt state or observed concurrent state writes. Dry-run
+also rejects an execution lock and over-limit reservations. These commands
+describe a snapshot: real dispatch rechecks filesystem/Git state before acting.
+
+### GitHub evidence and state transitions
+
+PR discovery must yield one same-repository branch match targeting `main`.
+Multiple matches (including historical closed PRs) or mismatched identity/base
+block supervision. No PR yet leaves Worker completion supervisable. Worker
+claims about PR numbers, validation and review do not authorize transitions.
+
+Supervision persists `pr_open`, then `ci_pending` or `ci_failed`. CI success
+permits `reviewing` only for a head with no prior review attempt. Required checks
+come from GitHub branch protection and active rulesets, supplemented by this
+repository's `Validate sample application` and `Validate orchestrator` jobs.
+Baseline checks must come from the GitHub Actions app; protected check matches
+must have GitHub's `isRequired` binding. Missing checks or a mismatched commit
+yield pending. Truncated responses or unreadable policy fail closed. The V1 gate
+conservatively includes all reported checks. GitHub's successful, neutral and
+skipped conclusions count as passing; failed/cancelled/timed-out checks fail.
+
+Each assignment stores the observed PR head, CI head, observation timestamp,
+reviewed head and a history of review attempts. Launch intent is saved before
+starting Reviewer. Results bind repository, ticket, PR number and head SHA.
+GitHub is read again after review; a changed head or CI consumes the attempt
+without authorizing the human gate. On a later pass a new head must pass CI and
+receive its own fresh review. Force-pushing back to a previously stale head does
+not reset its attempt. Evidence cannot be removed or reset through StateStore.
+
+| Independent evidence | Runtime state |
+| --- | --- |
+| Current-head CI + `APPROVE` | `waiting_for_human` |
+| Current-head CI + `REQUEST_CHANGES` | `changes_requested` |
+| Current-head CI + `BLOCK` | `blocked` |
+| GitHub `MERGED`, non-null timestamp, `mergedBy` of type `User` | `merged` |
+
+Reviewer exceptions, invalid output and uncertain interrupted attempts block
+without retry. Legacy review states lacking head-bound evidence also block for
+human inspection. A successful Worker remains a process result, not delivery
+evidence. Only observed human merge releases the RUN-1 reservation.
+
+### Structured Codex strategy and limits
+
+Inspected CLI: `codex 0.154.0`, `codex exec --help`. Coordinator and Reviewer run
+fresh processes using argument arrays, literal stdin and repository-root cwd:
+
+```text
+codex --ask-for-approval never exec --sandbox read-only --ephemeral --color never
+  --output-schema <private-schema.json> --output-last-message <private-result.json> -
+```
+
+The [official non-interactive documentation](https://developers.openai.com/codex/noninteractive/)
+documents the schema and final-message options. Final JSON is read from a private,
+bounded regular file and validated with strict Zod schemas and identity checks.
+Logs/prose are never parsed as verdicts. A nonzero exit, signal, missing file or
+invalid JSON fails closed, with no retry or automatic prose fallback. Manual
+Coordinator preflight remains available if structured execution is unavailable.
+No `resume`, Worker transcript, ticket-specific acceptance criteria or duplicated
+scope is included. Prompts require live Linear/GitHub reads, applicable role
+instructions, independence and no merge. Existing Worker invocation is unchanged.
+
+Dispatch and supervision share the exclusive execution lock; Reviewers run
+sequentially, so supervision never adds parallel processes beyond the configured
+limit. Status can inspect persisted progress while that lock is held. A crash
+leaves the lock and durable attempt for human inspection; there is no lock
+recovery, cancellation, process reattachment, retry, repair or polling daemon.
+
+GitHub observations are snapshots, not a merge authorization token; the human
+must still inspect the current PR when merging. `mergedBy: User` distinguishes
+GitHub bots but cannot distinguish a person's token from automation using that
+token. Check/ruleset pagination beyond 100 entries blocks rather than returning
+partial evidence. Job renames require updating the baseline policy. Installed
+Codex authentication/MCP must support live reads; the read-only filesystem sandbox
+and prompts do not revoke write-capable MCP credentials. Use appropriately scoped
+credentials; this runtime does not provide hostile-agent containment. No real
+Worker or Reviewer was dispatched for BER-8 or BER-9 during RUN-3.
 
 ## Validation
 
@@ -374,8 +506,9 @@ minimal prompt tests, a harmless subprocess substitute for the CLI adapter, and
 fake-Worker dispatch tests for concurrency, restart, duplicate prevention and
 storage failures. All execution fixtures use synthetic `TEST-*` IDs.
 
-Final local validation passed: lint, typecheck, all 248 tests across twelve files,
-build, and `git diff --check`.
+RUN-3 adds fake-GitHub supervision and CI-policy tests, structured subprocess
+substitutes, Coordinator subset validation, and CLI/dry-run/status regressions.
+All ordinary tests run without live Linear/GitHub/Codex execution.
 
 Live validation on 2026-09-09 through ai-workflow MCP with `.env` loaded at startup:
 
