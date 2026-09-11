@@ -36,9 +36,10 @@ Set these environment variables in the process launching the MCP server:
 | `GITHUB_REPOSITORY` | GitHub repository in `owner/repository` format. |
 
 `.env.example` contains only empty variable assignments. No credentials or project
-values are embedded in code. A local `.env` is ignored by Git and is **not loaded
-automatically**: export the variables or arrange environment loading in the
-launcher. Never put credentials in tracked configuration.
+values are embedded in code. A local `.env` is ignored by Git. The MCP server does
+not load it automatically: export variables or arrange environment loading in
+its launcher. The runtime CLI loads local files as described below. Never put
+credentials in tracked configuration.
 
 To load the local `.env` explicitly at startup, run from `orchestrator/`:
 
@@ -377,6 +378,13 @@ for operations that need them; `status` and dry-run need no Linear/GitHub/Codex
 credentials. `npm run --silent runtime -- ...` produces JSON without npm banners.
 
 `orchestrator` is an alias for the same CLI: `npm run orchestrator -- plan`.
+
+Both CLI aliases automatically load `<root>/.env`, then fill missing variables
+from `<root>/orchestrator/.env`. Exported environment variables take precedence,
+followed by the root file. Missing files are allowed; unreadable files fail
+without logging their contents. Paths follow `--root` (or the default repository
+root), not the caller's cwd. Files use Node's dotenv parser, not shell evaluation.
+For `plan`, configure both `LINEAR_API_KEY` and `LINEAR_PROJECT_ID`.
 
 `plan` reads live Linear through the existing deterministic scheduler and fetches
 the exact `refs/remotes/origin/main` base. By default it only reports candidates,

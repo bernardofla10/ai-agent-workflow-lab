@@ -206,8 +206,19 @@ describe("runtime CLI", () => {
     const { stdout } = await promisify(execFile)("npm",
       [...args, "status", "--root", repo.repositoryRoot], { cwd: repo.root, env });
     expect(JSON.parse(stdout)).toEqual([]);
-    const help = await promisify(execFile)("npm", [...args, "--help"], { cwd: repo.root, env });
+    const help = await promisify(execFile)("npm", [...args, "--help", "--root", repo.repositoryRoot], { cwd: repo.root, env });
     expect(help.stdout).toContain("dispatch --run-id ID [--dry-run]");
+    await expect(lstat(join(repo.repositoryRoot, ".ai-workflow"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("npm plan reads the root .env before validating required Linear configuration", async () => {
+    await writeFile(join(repo.repositoryRoot, ".env"), "LINEAR_API_KEY=synthetic-key-never-sent\n");
+    const env = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
+      !["LINEAR_API_KEY", "LINEAR_PROJECT_ID", "GITHUB_REPOSITORY", "MAX_CONCURRENCY"].includes(key)));
+    await expect(promisify(execFile)("npm", ["--prefix", resolve("."), "run", "--silent", "orchestrator", "--",
+      "plan", "--root", repo.repositoryRoot], { cwd: repo.root, env })).rejects.toMatchObject({
+      code: 1, stdout: "", stderr: "Missing environment variable: LINEAR_PROJECT_ID\n",
+    });
     await expect(lstat(join(repo.repositoryRoot, ".ai-workflow"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
