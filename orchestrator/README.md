@@ -376,6 +376,8 @@ defaults to two and must be a positive integer. Credentials are resolved only
 for operations that need them; `status` and dry-run need no Linear/GitHub/Codex
 credentials. `npm run --silent runtime -- ...` produces JSON without npm banners.
 
+`orchestrator` is an alias for the same CLI: `npm run orchestrator -- plan`.
+
 `plan` reads live Linear through the existing deterministic scheduler and fetches
 the exact `refs/remotes/origin/main` base. By default it only reports candidates,
 capacity and intended assignments, including a manual approval template. It

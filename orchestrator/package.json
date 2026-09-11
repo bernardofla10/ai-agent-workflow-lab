@@ -1,6 +1,7 @@
 {
   "type": "module",
   "scripts": {
+    "orchestrator": "tsx src/cli/index.ts",
     "runtime": "tsx src/cli/index.ts",
     "mcp": "tsx src/mcp/index.ts",
     "lint": "eslint .",
