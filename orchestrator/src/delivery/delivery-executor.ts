@@ -50,6 +50,9 @@ export class DeliveryExecutor {
         if (delivery.repository !== this.repository || delivery.repositoryRoot !== this.git.root || delivery.remoteUrl !== remoteUrl) {
           throw new Error("Configured delivery identity differs from persisted intent");
         }
+        if (delivery.tree && delivery.validation !== "isolated-v1") {
+          throw new Error("Legacy delivery gates were not isolated; human reconciliation required");
+        }
         const message = commitMessage(delivery);
         if (snapshot.head === assignment.baseCommit) {
           if (!["intent", "validated"].includes(delivery.phase) || !snapshot.dirty) throw new Error("Delivery commit disappeared or changes are missing");
@@ -63,6 +66,7 @@ export class DeliveryExecutor {
           if (snapshot.head !== assignment.baseCommit || await this.git.stage(assignment) !== tree) {
             throw new Error("Worktree changed during independent quality gates");
           }
+          delivery.validation = "isolated-v1";
           delivery.tree = tree;
           delivery.phase = "validated";
           await save(assignment); // Bind passing gates to the exact tree before commit.

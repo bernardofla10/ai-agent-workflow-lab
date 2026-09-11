@@ -62,6 +62,7 @@ export const deliverySchema = z.strictObject({
   baseCommit: baseCommitSchema,
   remoteUrl: z.string().min(1),
   phase: z.enum(["intent", "validated", "committed", "pushed", "pr_creating", "complete"]),
+  validation: z.literal("isolated-v1").optional(),
   tree: baseCommitSchema.optional(),
   commit: baseCommitSchema.optional(),
   pullRequest: z.strictObject({ number: z.number().int().positive().safe(), nodeId: z.string().min(1) }).optional(),

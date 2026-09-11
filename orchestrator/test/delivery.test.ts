@@ -1,5 +1,5 @@
 import { mkdir, readFile, rename, symlink, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { executeCommand, parseCommand, type RuntimeDependencies } from "../src/cli/runtime-cli.js";
 import { DeliveryExecutor } from "../src/delivery/delivery-executor.js";
@@ -27,7 +27,11 @@ describe("trusted delivery", () => {
   let pr: PullRequestSnapshot | undefined;
   const url = "https://github.com/test/repo.git";
   const current = async () => (await store.load("run-1")).assignments[0]!;
-  const git = () => new GitDelivery(repo.repositoryRoot, process);
+  const git = () => new GitDelivery(repo.repositoryRoot, process, { run: async (workspace) => {
+    for (const args of [["run", "lint"], ["run", "typecheck"], ["test"], ["run", "build"]]) {
+      await process("npm", args, join(workspace, "sample-app"));
+    }
+  } });
   const deliver = () => new DeliveryExecutor(store, git(), github, "test/repo").deliver("run-1");
   const head = () => repo.git(["rev-parse", "HEAD"], cwd);
   const count = (command: string) => process.mock.calls.filter(([file, args]) => file === "git" && args.includes(command)).length;
@@ -39,7 +43,8 @@ describe("trusted delivery", () => {
     await repo.git(["config", "user.email", "test@example.com"]);
     await mkdir(join(repo.repositoryRoot, "sample-app"));
     await writeFile(join(repo.repositoryRoot, "sample-app", "tracked.txt"), "base\n");
-    await repo.git(["add", "sample-app"]);
+    await writeFile(join(repo.repositoryRoot, ".gitignore"), ".ai-workflow/\n.env\n.env.*\n!.env.example\nnode_modules/\ndist/\nbuild/\ncoverage/\n*.log\n");
+    await repo.git(["add", "sample-app", ".gitignore"]);
     repo.baseCommit = await repo.commit("application base");
     remote = join(repo.root, "remote.git");
     await repo.git(["init", "--bare", remote]);
@@ -49,12 +54,14 @@ describe("trusted delivery", () => {
     await store.save(run);
     assignment = run.assignments[0]!;
     cwd = await new WorktreeManager(repo.repositoryRoot).create(assignment);
+    await mkdir(join(cwd, "sample-app", "node_modules"));
     const completed = structuredClone(run);
     completed.assignments[0]!.status = "worker_completed";
     await store.save(completed, run);
     assignment = completed.assignments[0]!;
     process = vi.fn(async (file, args, path) => {
       if (file === "npm") return "PASS";
+      if (args.includes("--get-url")) return `${url}\n`;
       // Production validates GitHub identity. Only the fake transport goes local.
       return runDeliveryProcess(file, args.map((arg) => arg === url ? remote : arg), path);
     });
@@ -85,10 +92,10 @@ describe("trusted delivery", () => {
     expect(await repo.git(["rev-parse", "main"])).toBe(repo.baseCommit);
     expect(await repo.git(["status", "--porcelain"], cwd)).toBe("");
     expect(await repo.git(["rev-list", "--count", `${repo.baseCommit}..HEAD`], cwd)).toBe("1");
-    expect(process.mock.calls.filter(([file]) => file === "npm").map(([, args, path]) => [args, path])).toEqual(
-      [["run", "lint"], ["run", "typecheck"], ["test"], ["run", "build"]].map((args) => [args, join(cwd, "sample-app")]),
-    );
-    expect(process.mock.calls.filter(([, args]) => args.includes("diff")).map(([, args]) => args.slice(4)))
+    const gateCalls = process.mock.calls.filter(([file]) => file === "npm");
+    expect(gateCalls.map(([, args]) => args)).toEqual([["run", "lint"], ["run", "typecheck"], ["test"], ["run", "build"]]);
+    expect(gateCalls.every(([, , path]) => path !== join(cwd, "sample-app") && path.endsWith("/sample-app"))).toBe(true);
+    expect(process.mock.calls.filter(([, args]) => args.includes("--check")).map(([, args]) => args.slice(4)))
       .toEqual([["diff", "--check"], ["diff", "--cached", "--check"]]);
     const commitCall = process.mock.calls.find(([, args]) => args.includes("commit"))!;
     expect(commitCall[1].slice(4, 8)).toEqual(["commit", "--no-gpg-sign", "--cleanup=verbatim", "-m"]);
@@ -399,6 +406,7 @@ describe("trusted delivery", () => {
     await waveStore.save(wave);
     for (const entry of wave.assignments) {
       const path = await new WorktreeManager(repo.repositoryRoot).create(entry);
+      await mkdir(join(path, "sample-app", "node_modules"));
       await writeFile(join(path, "sample-app", entry.ticketId === "BER-8" ? "untracked.txt" : "tracked.txt"), "Wave 2 implementation\n");
     }
     const completed = structuredClone(wave);
@@ -435,6 +443,95 @@ describe("trusted delivery", () => {
     expect(path).toBe(repo.repositoryRoot);
     expect(args.slice(0, 10)).toEqual(["pr", "create", "--repo", "test/repo", "--head", assignment.branch, "--base", "main", "--title", "TEST-1: deliver implementation"]);
     expect(args.at(-1)).toContain("Automated trusted delivery for Linear issue TEST-1");
+  });
+
+  it.each([".ai-workflow/runtime.json", ".env", "sample-app/.env.local", "sample-app/dist/generated.js",
+    "sample-app/build/output.js", "sample-app/coverage/result.json", "sample-app/node_modules/injected.js", "debug.log"])(
+    "rejects force-staged excluded addition %s even if Worker removes ignore rules", async (path) => {
+      await mkdir(dirname(join(cwd, path)), { recursive: true });
+      await writeFile(join(cwd, path), "must not deliver\n");
+      await repo.git(["add", "--force", "--", path], cwd);
+      await writeFile(join(cwd, ".gitignore"), "");
+      await expect(deliver()).rejects.toThrow("trusted repository exclusions");
+      expect(await head()).toBe(repo.baseCommit);
+      expect(count("commit")).toBe(0);
+      expect(count("push")).toBe(0);
+      expect(github.create).not.toHaveBeenCalled();
+    },
+  );
+
+  it("allows the trusted environment example exception", async () => {
+    await writeFile(join(cwd, ".env.example"), "EXAMPLE=placeholder\n");
+    await deliver();
+    expect((await current()).status).toBe("pr_open");
+  });
+
+  it("ignores worktree-specific URL rewriting for push using canonical-root configuration", async () => {
+    const wrong = join(repo.root, "wrong.git");
+    await repo.git(["init", "--bare", wrong]);
+    await repo.git(["config", "extensions.worktreeConfig", "true"]);
+    // The fake transport maps the validated URL to the local legitimate remote.
+    await repo.git(["config", "--worktree", `url.${wrong}.insteadOf`, remote], cwd);
+    await dirty();
+    await deliver();
+    expect(await repo.git(["ls-remote", "--refs", wrong], repo.root)).toBe("");
+    expect(await repo.git(["ls-remote", "--refs", remote], repo.root)).toContain(await head());
+    expect(process.mock.calls.find(([, args]) => args.includes("push"))![2]).toBe(repo.repositoryRoot);
+  });
+
+  it("rejects a second URL rewrite at the root before push", async () => {
+    await stopBeforePR();
+    const wrong = join(repo.root, "wrong.git");
+    await repo.git(["init", "--bare", wrong]);
+    await repo.git(["config", `url.${wrong}.insteadOf`, url]);
+    const actual = process.getMockImplementation()!;
+    process.mockImplementation((file, args, path) => args.includes("--get-url")
+      ? runDeliveryProcess(file, args, path) : actual(file, args, path));
+    const pushes = count("push");
+    await expect(git().push(url, assignment, await head())).rejects.toThrow("URL rewriting");
+    expect(count("push")).toBe(pushes);
+    expect(await repo.git(["ls-remote", "--refs", wrong], repo.root)).toBe("");
+  });
+
+  it("rejects pushInsteadOf even when origin has an explicit validated pushurl", async () => {
+    const wrong = join(repo.root, "wrong.git");
+    await repo.git(["init", "--bare", wrong]);
+    await repo.git(["config", "remote.origin.pushurl", url]);
+    await repo.git(["config", `url.${wrong}.pushInsteadOf`, url]);
+    await expect(git().remote("test/repo")).rejects.toThrow("URL rewriting");
+    await expect(git().push(url, assignment, repo.baseCommit)).rejects.toThrow("URL rewriting");
+    expect(count("push")).toBe(0);
+    expect(await repo.git(["ls-remote", "--refs", wrong], repo.root)).toBe("");
+  });
+
+  it("rejects source mutation inside the disposable gate workspace", async () => {
+    await dirty();
+    const actual = process.getMockImplementation()!;
+    process.mockImplementation(async (file, args, path) => {
+      if (file === "npm") await writeFile(join(path, "tracked.txt"), "tampered validation\n");
+      return actual(file, args, path);
+    });
+    await expect(deliver()).rejects.toThrow("changed validated source");
+    expect(await readFile(join(cwd, "sample-app", "tracked.txt"), "utf8")).toBe("implementation\n");
+    expect(count("commit")).toBe(0);
+  });
+
+  it("fails closed when the isolation runner cannot start", async () => {
+    await dirty();
+    const isolated = new GitDelivery(repo.repositoryRoot, process, { run: async () => { throw new Error("Sandbox unavailable"); } });
+    await expect(new DeliveryExecutor(store, isolated, github, "test/repo").deliver("run-1")).rejects.toThrow("Sandbox unavailable");
+    expect(count("commit")).toBe(0);
+    expect(count("push")).toBe(0);
+  });
+
+  it("does not reuse pre-isolation validation evidence after restart", async () => {
+    await stopBeforePR();
+    const legacy = await store.load("run-1");
+    delete legacy.assignments[0]!.delivery!.validation;
+    // Reproduce an old persisted file; the normal store forbids removing evidence.
+    await writeFile(join(repo.repositoryRoot, ".ai-workflow", "runs", "run-1.json"), JSON.stringify(legacy));
+    await expect(deliver()).rejects.toThrow("Legacy delivery gates were not isolated");
+    expect(github.create).not.toHaveBeenCalled();
   });
 
   it("requires run ID and rejects delivery dry-run ambiguity", () => {

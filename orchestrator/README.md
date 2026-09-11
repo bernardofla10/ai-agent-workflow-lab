@@ -578,17 +578,39 @@ and index state. Fresh attempts require dirty changes at the exact base commit.
 Unexpected existing commits, remote branches or PRs without intent fail closed.
 
 The executor persists identity before staging, stages tracked and untracked files,
-and runs `npm run lint`, `npm run typecheck`, `npm test`, `npm run build` from the
-assigned `sample-app/`, plus `git diff --check` for both working tree and index.
-Gates must leave the staged content unchanged. Passing evidence binds the exact
-Git tree before commit. Worker-reported results are never delivery evidence.
+and rejects staged additions excluded by the pinned base commit's root
+`.gitignore` and mandatory runtime/environment/build exclusions. A Worker cannot
+bypass this check with `git add -f` or by changing `.gitignore`. `.env.example`
+remains allowed. This check runs after staging and immediately before commit.
+
+The host exports the staged sources into a disposable directory and copies only
+preinstalled `sample-app/node_modules`, preserving symlinks without following
+host paths and excluding dependency metadata/credential files. `npm run lint`,
+`npm run typecheck`, `npm test`, `npm run build` run from that copy's `sample-app/`
+in a [Bubblewrap sandbox](https://github.com/containers/bubblewrap). The sandbox
+has separate user, PID, network, IPC and UTS namespaces, an empty environment
+with a small fixed allowlist, a fresh home and temporary directory, readonly
+system tools and the current Node/npm toolchain. It exposes neither host home,
+Git metadata, runtime state, credentials nor host network/sockets. Only the
+disposable copy is writable. Setup or gate failure stops delivery; there is no
+unsandboxed fallback. Source file content/type/mode must remain unchanged in the
+copy. Build output stays in the disposable copy and is discarded.
+
+The trusted host also runs `git diff --check` for both working tree and index.
+Passing evidence binds the exact Git tree before commit. Worker-reported results
+are never delivery evidence.
 
 Git/gh/npm execute with argument arrays, `shell: false`, bounded output/time and
 sanitized Git routing variables. Optional Git index refresh writes are disabled.
 Git hooks and commit signing are disabled for deterministic host delivery. The
 push uses the explicit commit SHA and assignment branch, with no force, tags,
 merge, conflict resolution, branch deletion or worktree cleanup. The effective
-origin push URL must identify `GITHUB_REPOSITORY` on github.com exactly.
+origin push URL must identify `GITHUB_REPOSITORY` on github.com exactly. Remote
+resolution, discovery and push all use the canonical checkout's Git configuration;
+assignment-specific URL rules cannot redirect push. Before remote access or push,
+the executor checks both fetch and push URL expansion, including `insteadOf` and
+`pushInsteadOf` rules on a literal URL. A second rewrite fails before mutation.
+See [Git URL expansion](https://git-scm.com/docs/git-ls-remote.html).
 
 ### Persistent evidence and recovery
 
@@ -599,7 +621,11 @@ base SHA and effective remote URL. Evidence advances monotonically:
 
 `intent → validated → committed → pushed → pr_creating → complete`
 
-`validated` records the tree that passed local gates. The commit contains the
+`validated` records the tree that passed local gates and `validation: isolated-v1`.
+Previously persisted validated/committed attempts without this marker remain
+readable but cannot resume delivery automatically; human reconciliation is
+required because their gates ran with the old host privileges. Wave 2 assignments
+without any delivery intent are unaffected. The commit contains the
 attempt UUID. `committed` records the commit SHA. `complete` records the PR number
 and immutable GitHub node ID, alongside assignment `pullRequest` and `pr_open`.
 The state store rejects removing/rebinding intent or changing recorded evidence.
@@ -650,11 +676,16 @@ was run during RUN-4 implementation or tests; the recovery regression uses
 synthetic copies of these identifiers in temporary repositories with fake npm
 and GitHub integrations and a local bare Git remote.
 
-Limits: V1 delivery gates target application tickets in `sample-app/`; dependencies
-must already be installed. The repository and local programs are trusted; this
-is not isolation from hostile code or external writers. Submodules, sparse or
-hidden index entries, symlinked directories, noncanonical roots, non-github.com
-remotes and ambiguous histories require human handling. Generated tracked or
-untracked changes during gates fail closed. PR text identifies the ticket and
-automated validation but is generic; independent review must assess scope and
+Limits: V1 delivery requires Linux, Bubblewrap on PATH, unprivileged user
+namespaces, and a Node distribution with npm at `../lib/node_modules/npm` relative
+to the Node binary directory (for example nvm or actions/setup-node). Install
+Bubblewrap with `sudo apt-get install bubblewrap` on Ubuntu. CI installs it and
+runs required real sandbox regressions; unsupported isolation is never silently
+skipped. Application dependencies must already be installed. Gates cannot use
+network services or host-only configuration. The host toolchain, Git configuration
+and orchestrator are trusted; concurrent external host writers remain unsupported.
+Submodules, sparse/hidden index entries, symlinked worktree/dependency directories,
+noncanonical roots, non-github.com remotes and ambiguous histories require human
+handling. Changes to staged source content inside validation fail closed. PR text
+identifies the ticket and automated validation but is generic; independent review must assess scope and
 behavior. No Worker/Reviewer retries, deployment, cleanup or automatic merge.
