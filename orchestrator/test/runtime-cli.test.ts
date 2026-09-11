@@ -52,7 +52,7 @@ describe("runtime CLI", () => {
       coordinator: { decide: vi.fn().mockImplementation(async (input) => ({ ...input, allowed: ["TEST-2"] })) },
       dispatch: vi.fn((id) => executor.dispatch(id)), preview: vi.fn((id) => executor.preview(id)),
       previewEphemeral: vi.fn((run) => executor.previewEphemeral(run)),
-      supervise: vi.fn(), now: () => new Date("2026-09-11T12:00:00Z") };
+      deliver: vi.fn(), supervise: vi.fn(), now: () => new Date("2026-09-11T12:00:00Z") };
   });
   afterEach(async () => { await repo.cleanup(); });
 

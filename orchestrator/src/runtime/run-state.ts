@@ -35,6 +35,20 @@ export function parseRun(value: unknown): ExecutionRun {
       throw new Error("Branch does not belong to ticket");
     }
     if (assignment.worktreePath !== worktreePath(assignment.ticketId)) throw new Error("Unsafe worktree path");
+    const delivery = assignment.delivery;
+    if (delivery) {
+      if ((delivery.phase !== "complete" && assignment.status !== "worker_completed") ||
+        delivery.ticketId !== assignment.ticketId || delivery.branch !== assignment.branch ||
+        delivery.worktreePath !== assignment.worktreePath || delivery.baseCommit !== assignment.baseCommit ||
+        (delivery.phase !== "intent" && !delivery.tree) ||
+        (!["intent", "validated"].includes(delivery.phase) && !delivery.commit) ||
+        (delivery.phase === "intent" && (delivery.tree || delivery.commit)) ||
+        (delivery.phase === "validated" && delivery.commit) ||
+        (delivery.phase === "complete" && !delivery.pullRequest) ||
+        (delivery.pullRequest && (delivery.phase !== "complete" || delivery.pullRequest.number !== assignment.pullRequest))) {
+        throw new Error("Inconsistent delivery evidence");
+      }
+    }
     const evidence = assignment.supervision;
     if (evidence) {
       unique(evidence.reviewAttempts.map((attempt) => attempt.headCommit), "review attempt");

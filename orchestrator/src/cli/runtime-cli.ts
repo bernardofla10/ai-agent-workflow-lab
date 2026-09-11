@@ -13,6 +13,7 @@ export const usage = `runtime <command> [--root PATH] [--run-id ID]
   dispatch --dry-run
   dispatch --run-id ID [--dry-run]
   status [--run-id ID]
+  deliver --run-id ID
   supervise --run-id ID
 
 plan and dispatch --dry-run are ephemeral by default. plan --persist reserves a
@@ -35,7 +36,7 @@ export function parseCommand(args: string[]) {
   } });
   if (values.help) return { command: "help" as const, values };
   const command = positionals[0];
-  if (positionals.length !== 1 || !["plan", "preflight", "dispatch", "status", "supervise"].includes(command ?? "")) throw new Error(usage);
+  if (positionals.length !== 1 || !["plan", "preflight", "dispatch", "status", "supervise", "deliver"].includes(command ?? "")) throw new Error(usage);
   if ((values["dry-run"] && command !== "dispatch") ||
     (values.coordinator && command !== "plan") ||
     (values["approval-file"] && command !== "plan" && command !== "preflight") ||
@@ -43,10 +44,10 @@ export function parseCommand(args: string[]) {
     (values.coordinator && values.coordinator !== "codex") ||
     (values.coordinator && values["approval-file"])) throw new Error("Invalid options for runtime command");
   if (values["run-id"]) runIdSchema.parse(values["run-id"]);
-  if ((command === "preflight" || command === "supervise" || (command === "dispatch" && !values["dry-run"])) &&
+  if ((command === "preflight" || command === "deliver" || command === "supervise" || (command === "dispatch" && !values["dry-run"])) &&
     !values["run-id"]) throw new Error("--run-id is required");
   if (command === "preflight" && !values["approval-file"]) throw new Error("--approval-file is required");
-  return { command: command as "plan" | "preflight" | "dispatch" | "status" | "supervise", values };
+  return { command: command as "plan" | "preflight" | "dispatch" | "status" | "supervise" | "deliver", values };
 }
 
 export interface RuntimeDependencies {
@@ -59,6 +60,7 @@ export interface RuntimeDependencies {
   dispatch(runId: string): Promise<{ run: ExecutionRun }>;
   preview(runId: string): Promise<unknown>;
   previewEphemeral(run: ExecutionRun): Promise<unknown>;
+  deliver(runId: string): Promise<ExecutionRun>;
   supervise(runId: string): Promise<ExecutionRun>;
   now(): Date;
 }
@@ -74,9 +76,10 @@ export async function executeCommand(input: ReturnType<typeof parseCommand>, dep
     if (!run) throw new Error("Persisted run not found");
     return run;
   }
-  if (command === "preflight" || command === "supervise" || (command === "dispatch" && id)) {
+  if (command === "preflight" || command === "deliver" || command === "supervise" || (command === "dispatch" && id)) {
     const run = existing.find((entry) => entry.id === id);
     if (!run) throw new Error("Persisted run not found");
+    if (command === "deliver") return deps.deliver(run.id);
     if (command === "supervise") return deps.supervise(run.id);
     if (command === "preflight") {
       if (run.preflight) throw new Error("Recorded preflight is immutable");

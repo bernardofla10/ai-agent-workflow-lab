@@ -52,6 +52,23 @@ export const preflightSchema = z.strictObject({
   allowed: z.array(ticketIdSchema),
 });
 
+export const deliverySchema = z.strictObject({
+  attemptId: z.uuid(),
+  ticketId: ticketIdSchema,
+  repository: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/),
+  branch: z.string(),
+  worktreePath: z.string(),
+  repositoryRoot: z.string().min(1),
+  baseCommit: baseCommitSchema,
+  remoteUrl: z.string().min(1),
+  phase: z.enum(["intent", "validated", "committed", "pushed", "pr_creating", "complete"]),
+  validation: z.literal("isolated-v1").optional(),
+  tree: baseCommitSchema.optional(),
+  commit: baseCommitSchema.optional(),
+  pullRequest: z.strictObject({ number: z.number().int().positive().safe(), nodeId: z.string().min(1) }).optional(),
+});
+export type DeliveryState = z.infer<typeof deliverySchema>;
+
 export const workerAssignmentSchema = z.strictObject({
   ticketId: ticketIdSchema,
   status: executionStatusSchema,
@@ -63,6 +80,7 @@ export const workerAssignmentSchema = z.strictObject({
   reviewerVerdict: z.enum(["APPROVE", "REQUEST_CHANGES", "BLOCK"]).optional(),
   error: z.string().min(1).optional(),
   workerResult: workerResultSchema.optional(),
+  delivery: deliverySchema.optional(),
   supervision: supervisionSchema.optional(),
   // Legacy review states cannot identify which head may already have run.
   reviewUncertain: z.literal(true).optional(),
