@@ -19,7 +19,7 @@ export class GitWaveBaseProvider implements WaveBaseProvider {
     try {
       // Refresh main even when the clone has a restricted fetch refspec.
       await this.run("git", ["fetch", "origin", "+refs/heads/main:refs/remotes/origin/main"], options);
-      const { stdout } = await this.run("git", ["rev-parse", "--verify", "origin/main^{commit}"], options);
+      const { stdout } = await this.run("git", ["rev-parse", "--verify", "refs/remotes/origin/main^{commit}"], options);
       return baseCommitSchema.parse(stdout.trim());
     } catch {
       throw new Error("Unable to capture origin/main base commit; check repository and remote access");

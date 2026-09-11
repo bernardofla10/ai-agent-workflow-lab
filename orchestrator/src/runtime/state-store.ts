@@ -95,7 +95,8 @@ export class StateStore {
       }
       const nextRuns = parseRuns([...runs.filter((entry) => entry.id !== run.id), run]);
       const count = (entries: ExecutionRun[]) => entries.flatMap((entry) => entry.assignments.filter(reservesTicket)).length;
-      if (count(nextRuns) > this.limit && count(nextRuns) > count(runs)) {
+      // Releasing another reservation must not hide a new one while over limit.
+      if (added.length > 0 && count(nextRuns) > this.limit) {
         throw new Error("MAX_CONCURRENCY exceeded; reload and replan");
       }
       const temporary = join(this.directory, `${run.id}.tmp`);

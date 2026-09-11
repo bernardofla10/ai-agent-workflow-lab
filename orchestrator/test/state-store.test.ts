@@ -115,6 +115,67 @@ describe("StateStore", () => {
     expect(await store.loadAll()).toHaveLength(1);
   });
 
+  it("retains two existing reservations at limit one and allows state-only updates and releases", async () => {
+    const first = plan();
+    const second = plan("run-2", "BER-9");
+    await store.save(first);
+    await store.save(second);
+    const lowerLimit = new StateStore(root, 1);
+    await lowerLimit.save(first, first);
+    const running = structuredClone(first);
+    running.assignments[0]!.status = "running";
+    await lowerLimit.save(running, first);
+    expect(await lowerLimit.loadAll()).toEqual([running, second]);
+    const released = structuredClone(running);
+    released.assignments[0]!.status = "merged";
+    await lowerLimit.save(released, running);
+    expect(await lowerLimit.loadAll()).toEqual([released, second]);
+  });
+
+  it("rejects replacing a released reservation when the resulting global count still exceeds limit one", async () => {
+    const first = plan();
+    const queued = plan("run-1", "BER-10").assignments[0]!;
+    first.candidates.push(queued.ticketId);
+    first.dispatchable.push(queued.ticketId);
+    const second = plan("run-2", "BER-9");
+    await store.save(first);
+    await store.save(second);
+    const lowerLimit = new StateStore(root, 1);
+    const replacement = structuredClone(first);
+    replacement.assignments[0]!.status = "merged";
+    replacement.assignments.push(queued);
+    await expect(lowerLimit.save(replacement, first)).rejects.toThrow("MAX_CONCURRENCY");
+    expect(await lowerLimit.loadAll()).toEqual([first, second]);
+  });
+
+  it("rejects adding a second active reservation at limit one", async () => {
+    const lowerLimit = new StateStore(root, 1);
+    const first = plan();
+    await lowerLimit.save(first);
+    await expect(lowerLimit.save(plan("run-2", "BER-9"))).rejects.toThrow("MAX_CONCURRENCY");
+    expect(await lowerLimit.loadAll()).toEqual([first]);
+  });
+
+  it("allows normal dispatch at limit one after all existing reservations are released", async () => {
+    const first = plan();
+    const second = plan("run-2", "BER-9");
+    await store.save(first);
+    await store.save(second);
+    const lowerLimit = new StateStore(root, 1);
+    for (const previous of [first, second]) {
+      const released = structuredClone(previous);
+      released.assignments[0]!.status = "merged";
+      await lowerLimit.save(released, previous);
+    }
+    const existingRuns = await lowerLimit.loadAll();
+    const next = new DispatchPlanner(1).plan({ id: "run-3", createdAt: first.createdAt,
+      baseCommit: first.baseCommit, existingRuns,
+      readyTickets: [{ id: "BER-10", title: "Next task", status: "backlog", blockedBy: [] }] });
+    expect(next.assignments.map((assignment) => assignment.ticketId)).toEqual(["BER-10"]);
+    await lowerLimit.save(next);
+    expect(await lowerLimit.loadAll()).toEqual([...existingRuns, next]);
+  });
+
   it.each(["{", "null", "[]", JSON.stringify({ ...plan(), schemaVersion: 2 }),
     JSON.stringify({ ...plan(), assignments: [{ ...plan().assignments[0], status: "unknown" }] })])(
     "fails closed on corrupted state %s without overwriting it", async (contents) => {

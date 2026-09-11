@@ -15,7 +15,7 @@ describe("GitWaveBaseProvider", () => {
     expect(run.mock.calls).toEqual([
       ["git", ["fetch", "origin", "+refs/heads/main:refs/remotes/origin/main"],
         { cwd: "/repo with spaces", encoding: "utf8", timeout: 30_000 }],
-      ["git", ["rev-parse", "--verify", "origin/main^{commit}"],
+      ["git", ["rev-parse", "--verify", "refs/remotes/origin/main^{commit}"],
         { cwd: "/repo with spaces", encoding: "utf8", timeout: 30_000 }],
     ]);
   });
@@ -36,6 +36,41 @@ describe("GitWaveBaseProvider", () => {
   it("rejects rev-parse failure", async () => {
     const run = vi.fn().mockResolvedValueOnce({ stdout: "", stderr: "" }).mockRejectedValueOnce(new Error("exit 128"));
     await expect(new GitWaveBaseProvider("/repo", run).captureBaseCommit()).rejects.toThrow("Unable to capture");
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it("captures remote-tracking commit A when a conflicting origin/main tag points to commit B", async () => {
+    const root = await mkdtemp(join(tmpdir(), "workflow-git-ref-"));
+    const execute = promisify(execFile);
+    const git = (args: string[], cwd = root) => execute("git", args, { cwd, encoding: "utf8" });
+    try {
+      const source = join(root, "source");
+      const clone = join(root, "clone");
+      await git(["init", "--initial-branch=main", source]);
+      const commit = (cwd: string, message: string) => git([
+        "-c", "user.name=Test", "-c", "user.email=test@example.com",
+        "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-m", message,
+      ], cwd);
+      await commit(source, "commit A");
+      const commitA = (await git(["rev-parse", "HEAD"], source)).stdout.trim();
+      await git(["clone", source, clone]);
+      await commit(clone, "commit B");
+      const commitB = (await git(["rev-parse", "HEAD"], clone)).stdout.trim();
+      await git(["-c", "tag.gpgsign=false", "tag", "origin/main", commitB], clone);
+      expect(commitB).not.toBe(commitA);
+      expect((await git(["rev-parse", "refs/remotes/origin/main"], clone)).stdout.trim()).toBe(commitA);
+      expect((await git(["rev-parse", "refs/tags/origin/main"], clone)).stdout.trim()).toBe(commitB);
+
+      const baseCommit = await new GitWaveBaseProvider(clone).captureBaseCommit();
+      expect(baseCommit).toBe(commitA);
+      const wave = new DispatchPlanner().plan({ id: "run-1", createdAt: "2026-09-11T00:00:00Z",
+        baseCommit, existingRuns: [], readyTickets: [8, 9].map((id) => ({
+          id: `BER-${id}`, title: "Task", status: "backlog", blockedBy: [],
+        })) });
+      expect(wave.assignments.map((assignment) => assignment.baseCommit)).toEqual([commitA, commitA]);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("captures fresh origin/main in a real local repository while an existing wave retains its base", async () => {
