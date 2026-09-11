@@ -80,6 +80,47 @@ describe("StateStore", () => {
     expect(await store.load(run.id)).toEqual(run);
   });
 
+  it("attaches preflight once with compare-and-save and preserves it across later transitions", async () => {
+    const run = plan();
+    await store.save(run);
+    const approved = { ...run, preflight: { kind: "manual" as const, runId: run.id,
+      baseCommit: run.baseCommit, candidates: run.candidates, allowed: run.candidates } };
+    await store.save(approved, run);
+    await expect(store.save(approved, run)).rejects.toThrow("Stale");
+    await expect(store.save({ ...approved, preflight: { ...approved.preflight, allowed: [] } }, approved)).rejects.toThrow("immutable");
+    await expect(store.save(run, approved)).rejects.toThrow("immutable");
+    const running = structuredClone(approved);
+    running.assignments[0]!.status = "running";
+    await store.save(running, approved);
+    expect(await new StateStore(root).load(run.id)).toEqual(running);
+  });
+
+  it.each(["unbound", "wrong-run", "changed-assignment", "already-started", "stale"])(
+    "rejects attaching preflight to %s state", async (mode) => {
+      const run = plan();
+      await store.save(run);
+      const approved = structuredClone(run);
+      approved.preflight = { kind: "manual", runId: run.id, baseCommit: run.baseCommit,
+        candidates: run.candidates, allowed: run.candidates };
+      if (mode === "unbound") delete approved.preflight.runId;
+      if (mode === "wrong-run") approved.preflight.runId = "run-other";
+      if (mode === "changed-assignment") approved.assignments[0]!.branch += "-changed";
+      let expected = run;
+      if (mode === "already-started" || mode === "stale") {
+        const running = structuredClone(run);
+        running.assignments[0]!.status = "running";
+        await store.save(running, run);
+        if (mode === "already-started") {
+          expected = running;
+          approved.assignments = running.assignments;
+        }
+      }
+      const before = await readFile(join(directory, "run-1.json"), "utf8");
+      await expect(store.save(approved, expected)).rejects.toThrow();
+      expect(await readFile(join(directory, "run-1.json"), "utf8")).toBe(before);
+    },
+  );
+
   it("only creates planned reservations and forbids reactivating a merged assignment", async () => {
     const run = plan();
     const merged = structuredClone(run);

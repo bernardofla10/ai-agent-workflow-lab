@@ -16,6 +16,24 @@ describe("runtime CLI", () => {
   const ready = [{ id: "TEST-1", title: "Task one", status: "backlog" as const, blockedBy: [] },
     { id: "TEST-2", title: "Task two", status: "backlog" as const, blockedBy: [] }];
   const command = (...args: string[]) => executeCommand(parseCommand(args), deps);
+  const approvalFile = async (allowed: string[], overrides: Record<string, unknown> = {}) => {
+    const file = join(repo.root, "approval.json");
+    await writeFile(file, JSON.stringify({ runId: "run-1", baseCommit: repo.baseCommit,
+      candidates: ["TEST-1", "TEST-2"], allowed, ...overrides }));
+    return file;
+  };
+  const filesystemSnapshot = async () => {
+    const entries = (await readdir(repo.root, { recursive: true })).sort();
+    return Promise.all(entries.map(async (entry) => {
+      const path = join(repo.root, entry);
+      return [entry, (await lstat(path)).isFile() ? (await readFile(path)).toString("base64") : null];
+    }));
+  };
+  const approvePersisted = async (allowed = ["TEST-2"]) => {
+    await command("plan", "--persist", "--run-id", "run-1");
+    await command("preflight", "--run-id", "run-1", "--approval-file", await approvalFile(allowed));
+    return store.load("run-1");
+  };
   const authorize = async () => {
     const run = plannedRun(repo.baseCommit);
     run.preflight = { kind: "manual", baseCommit: run.baseCommit, candidates: run.candidates, allowed: run.candidates };
@@ -30,23 +48,158 @@ describe("runtime CLI", () => {
     const executor = new DispatchExecutor(repo.repositoryRoot, { run: runWorker });
     deps = { store, concurrency: 2,
       readyTickets: vi.fn().mockResolvedValue(ready), captureBaseCommit: vi.fn().mockResolvedValue(repo.baseCommit),
+      inspectBaseCommit: vi.fn().mockResolvedValue(repo.baseCommit),
       coordinator: { decide: vi.fn().mockImplementation(async (input) => ({ ...input, allowed: ["TEST-2"] })) },
       dispatch: vi.fn((id) => executor.dispatch(id)), preview: vi.fn((id) => executor.preview(id)),
+      previewEphemeral: vi.fn((run) => executor.previewEphemeral(run)),
       supervise: vi.fn(), now: () => new Date("2026-09-11T12:00:00Z") };
   });
   afterEach(async () => { await repo.cleanup(); });
 
   it("previews deterministic candidates, base and capacity without persisting or running Codex", async () => {
     deps.concurrency = 1;
+    const before = await filesystemSnapshot();
     const result = await command("plan", "--run-id", "run-1");
     expect(result).toMatchObject({ baseCommit: repo.baseCommit, candidates: ["TEST-1", "TEST-2"],
       concurrency: 1, persisted: false, preflightRequired: true, assignments: [{ ticketId: "TEST-1", status: "planned" }] });
     expect(deps.readyTickets).toHaveBeenCalledOnce();
-    expect(deps.captureBaseCommit).toHaveBeenCalledOnce();
+    expect(deps.inspectBaseCommit).toHaveBeenCalledOnce();
+    expect(deps.captureBaseCommit).not.toHaveBeenCalled();
     expect(deps.coordinator.decide).not.toHaveBeenCalled();
     expect(deps.dispatch).not.toHaveBeenCalled();
     expect(runWorker).not.toHaveBeenCalled();
     await expect(lstat(join(repo.repositoryRoot, ".ai-workflow"))).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await filesystemSnapshot()).toEqual(before);
+  });
+
+  it("plan --persist reserves planned assignments at one captured base without branches, worktrees or processes", async () => {
+    const branches = await repo.git(["show-ref"]);
+    const worktrees = await repo.git(["worktree", "list", "--porcelain"]);
+    expect(await command("plan", "--persist", "--run-id", "run-1")).toMatchObject({ persisted: true,
+      preflightRequired: true, approvalTemplate: { runId: "run-1", baseCommit: repo.baseCommit } });
+    const run = await store.load("run-1");
+    expect(run.assignments.map(({ ticketId, status, baseCommit }) => ({ ticketId, status, baseCommit }))).toEqual(
+      ready.map(({ id }) => ({ ticketId: id, status: "planned", baseCommit: repo.baseCommit })),
+    );
+    expect(run.preflight).toBeUndefined();
+    expect(deps.captureBaseCommit).toHaveBeenCalledOnce();
+    expect(deps.inspectBaseCommit).not.toHaveBeenCalled();
+    expect(await repo.git(["show-ref"])).toBe(branches);
+    expect(await repo.git(["worktree", "list", "--porcelain"])).toBe(worktrees);
+    expect(await readdir(repo.root)).toEqual([repo.repositoryRoot.split("/").at(-1)]);
+    for (const fn of [runWorker, deps.coordinator.decide, deps.dispatch, deps.preview]) expect(fn).not.toHaveBeenCalled();
+    await expect(command("plan", "--persist", "--run-id", "run-1")).rejects.toThrow();
+    expect(await store.load("run-1")).toEqual(run);
+  });
+
+  it("regression: dispatch --dry-run without --run-id previews a fresh ephemeral wave with zero writes or execution", async () => {
+    const save = vi.spyOn(store, "save");
+    const before = await filesystemSnapshot();
+    const result = await command("dispatch", "--dry-run");
+    expect(result).toMatchObject({ dryRun: true, persisted: false, preflightRequired: true,
+      noSideEffectsPerformed: true, wouldStart: 2, baseCommit: repo.baseCommit, candidates: ["TEST-1", "TEST-2"],
+      assignments: ready.map(({ id }) => ({ ticketId: id, status: "planned", baseCommit: repo.baseCommit })),
+      actions: ready.map(({ id }) => ({ ticketId: id, action: "start_worker", baseCommit: repo.baseCommit })) });
+    expect(await filesystemSnapshot()).toEqual(before);
+    expect(deps.readyTickets).toHaveBeenCalledOnce();
+    expect(deps.inspectBaseCommit).toHaveBeenCalledOnce();
+    for (const fn of [save, runWorker, deps.captureBaseCommit, deps.coordinator.decide, deps.dispatch, deps.supervise]) {
+      expect(fn).not.toHaveBeenCalled();
+    }
+    expect(await store.inspectAll()).toEqual([]);
+  });
+
+  it("ephemeral dry-run honors existing reservations and remaining capacity", async () => {
+    await authorize();
+    expect(await command("dispatch", "--dry-run")).toMatchObject({ wouldStart: 1, assignments: [{ ticketId: "TEST-2" }] });
+    expect(await store.inspectAll()).toHaveLength(1);
+    deps.concurrency = 1;
+    expect(await command("dispatch", "--dry-run")).toMatchObject({ wouldStart: 0, assignments: [] });
+    expect(runWorker).not.toHaveBeenCalled();
+  });
+
+  it("ephemeral preview fails closed if another run reserves its ticket after planning", async () => {
+    const executor = new DispatchExecutor(repo.repositoryRoot, { run: runWorker });
+    const preview = plannedRun(repo.baseCommit, ["TEST-1"], "run-preview");
+    await authorize();
+    await expect(executor.previewEphemeral(preview)).rejects.toThrow("Duplicate active ticket");
+    expect(runWorker).not.toHaveBeenCalled();
+  });
+
+  it("preflight attaches an immutable subset to the persisted snapshot without replanning or executing", async () => {
+    await command("plan", "--persist", "--run-id", "run-1");
+    const original = await store.load("run-1");
+    vi.clearAllMocks();
+    const file = await approvalFile(["TEST-2"]);
+    await command("preflight", "--run-id", "run-1", "--approval-file", file);
+    const approved = await new StateStore(repo.repositoryRoot).load("run-1");
+    expect(approved).toEqual({ ...original, preflight: { kind: "manual", runId: original.id,
+      baseCommit: original.baseCommit, candidates: original.candidates, allowed: ["TEST-2"] } });
+    for (const fn of [deps.readyTickets, deps.captureBaseCommit, deps.inspectBaseCommit, deps.coordinator.decide, runWorker]) {
+      expect(fn).not.toHaveBeenCalled();
+    }
+    await expect(command("preflight", "--run-id", "run-1", "--approval-file", file)).rejects.toThrow("immutable");
+    expect(await store.load("run-1")).toEqual(approved);
+  });
+
+  it.each([
+    { allowed: ["TEST-3"] }, { allowed: ["TEST-1", "TEST-1"] }, { baseCommit: "b".repeat(40) },
+    { runId: "run-other" }, { runId: undefined }, { candidates: ["TEST-1"] },
+  ])("preflight rejects mismatched or invalid approval %j without altering the run", async (override) => {
+    await command("plan", "--persist", "--run-id", "run-1");
+    const file = await approvalFile(["TEST-1"], override);
+    const before = await filesystemSnapshot();
+    await expect(command("preflight", "--run-id", "run-1", "--approval-file", file)).rejects.toThrow();
+    expect(await filesystemSnapshot()).toEqual(before);
+    expect(runWorker).not.toHaveBeenCalled();
+  });
+
+  it("real dispatch rejects empty approval and dry-run reports zero starts", async () => {
+    const run = await approvePersisted([]);
+    await expect(command("dispatch", "--run-id", "run-1")).rejects.toThrow("approval is empty");
+    expect(await command("dispatch", "--run-id", "run-1", "--dry-run")).toMatchObject({ wouldStart: 0 });
+    expect(await store.load("run-1")).toEqual(run);
+    expect(deps.dispatch).not.toHaveBeenCalled();
+    expect(runWorker).not.toHaveBeenCalled();
+  });
+
+  it("persisted subset dry-run is write-free and real dispatch runs only approved assignments once after restart", async () => {
+    const run = await approvePersisted();
+    deps.store = new StateStore(repo.repositoryRoot);
+    const before = await filesystemSnapshot();
+    vi.clearAllMocks();
+    expect(await command("dispatch", "--run-id", "run-1", "--dry-run")).toMatchObject({ persisted: true,
+      preflightRequired: false, wouldStart: 1, actions: [
+        { ticketId: "TEST-1", action: "skip", reason: "Not approved by preflight" },
+        { ticketId: "TEST-2", action: "start_worker", baseCommit: run.baseCommit },
+      ] });
+    expect(await filesystemSnapshot()).toEqual(before);
+    expect(runWorker).not.toHaveBeenCalled();
+    const newBase = await repo.commit("main advanced after approval");
+    expect(newBase).not.toBe(run.baseCommit);
+    await command("dispatch", "--run-id", "run-1");
+    await command("dispatch", "--run-id", "run-1");
+    expect(runWorker).toHaveBeenCalledTimes(1);
+    const cwd = resolve(repo.repositoryRoot, run.assignments[1]!.worktreePath);
+    expect(runWorker.mock.calls[0]![0].cwd).toBe(cwd);
+    expect(await repo.git(["rev-parse", "HEAD"], cwd)).toBe(run.baseCommit);
+    expect(await repo.git(["branch", "--list", run.assignments[0]!.branch])).toBe("");
+    expect((await store.load("run-1")).assignments.map((entry) => entry.status)).toEqual(["planned", "worker_completed"]);
+    for (const fn of [deps.captureBaseCommit, deps.inspectBaseCommit, deps.readyTickets, deps.coordinator.decide]) expect(fn).not.toHaveBeenCalled();
+    const next = await command("plan", "--run-id", "run-2");
+    expect(next).toMatchObject({ assignments: [] }); // Approval never releases a reservation.
+  });
+
+  it("dispatch rejects corrupted persisted approval identity before preview or execution", async () => {
+    const run = await approvePersisted();
+    run.preflight!.runId = "run-other";
+    await writeFile(join(repo.repositoryRoot, ".ai-workflow/runs/run-1.json"), JSON.stringify(run));
+    for (const options of [[], ["--dry-run"]]) {
+      await expect(command("dispatch", "--run-id", "run-1", ...options)).rejects.toThrow("Invalid runtime state");
+    }
+    expect(deps.dispatch).not.toHaveBeenCalled();
+    expect(deps.preview).not.toHaveBeenCalled();
+    expect(runWorker).not.toHaveBeenCalled();
   });
 
   it("persists only the Coordinator subset while retaining all deterministic candidates", async () => {
@@ -55,7 +208,7 @@ describe("runtime CLI", () => {
     expect(run.candidates).toEqual(["TEST-1", "TEST-2"]);
     expect(run.dispatchable).toEqual(["TEST-2"]);
     expect(run.assignments.map((entry) => entry.ticketId)).toEqual(["TEST-2"]);
-    expect(run.preflight).toEqual({ kind: "codex", baseCommit: repo.baseCommit,
+    expect(run.preflight).toEqual({ kind: "codex", runId: "run-1", baseCommit: repo.baseCommit,
       candidates: ["TEST-1", "TEST-2"], allowed: ["TEST-2"] });
     expect(deps.dispatch).not.toHaveBeenCalled();
     expect(runWorker).not.toHaveBeenCalled();
@@ -214,6 +367,9 @@ describe("runtime CLI", () => {
   it.each([
     [], ["merge"], ["dispatch"], ["supervise"], ["status", "--dry-run"], ["dispatch", "--run-id", "../unsafe"],
     ["plan", "--coordinator", "prose"], ["plan", "--coordinator", "codex", "--approval-file", "file"], ["status", "extra"],
+    ["preflight"], ["preflight", "--run-id", "run-1"], ["preflight", "--run-id", "run-1", "--coordinator", "codex"],
+    ["dispatch", "--dry-run", "--persist"], ["plan", "--persist", "--coordinator", "codex"],
+    ["plan", "--persist", "--approval-file", "file"],
   ].map((args) => ({ args })))("rejects invalid command options $args", ({ args }) => {
     expect(() => parseCommand(args)).toThrow();
   });

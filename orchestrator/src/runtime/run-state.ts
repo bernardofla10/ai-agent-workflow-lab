@@ -17,12 +17,13 @@ export function parseRun(value: unknown): ExecutionRun {
   unique(run.assignments.map((assignment) => assignment.ticketId), "assignment");
   if (run.preflight) {
     unique(run.preflight.allowed, "Coordinator selection");
-    if (run.preflight.baseCommit !== run.baseCommit ||
+    if ((run.preflight.runId !== undefined && run.preflight.runId !== run.id) || run.preflight.baseCommit !== run.baseCommit ||
       JSON.stringify(run.preflight.candidates) !== JSON.stringify(run.candidates) ||
-      run.preflight.allowed.some((id) => !run.candidates.includes(id)) ||
-      run.dispatchable.some((id) => !run.preflight!.allowed.includes(id))) {
+      run.preflight.allowed.some((id) => !run.candidates.includes(id))) {
       throw new Error("Coordinator preflight does not match the deterministic plan");
     }
+    // Scheduler eligibility and reservations stay intact. Dispatch must filter
+    // assignments by the approved subset; approval does not release reservations.
   }
   for (const id of run.dispatchable) {
     if (!run.candidates.includes(id)) throw new Error("Dispatchable ticket is not a candidate");

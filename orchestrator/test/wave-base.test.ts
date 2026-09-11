@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { lstat, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -8,6 +8,30 @@ import { GitWaveBaseProvider } from "../src/integrations/git/wave-base.js";
 import { DispatchPlanner } from "../src/dispatch/dispatch-planner.js";
 
 describe("GitWaveBaseProvider", () => {
+  it("inspects only the exact remote main ref with read-only argument arrays", async () => {
+    const run = vi.fn().mockResolvedValue({ stdout: `${"a".repeat(40)}\trefs/heads/main\n`, stderr: "" });
+    expect(await new GitWaveBaseProvider("/repo with spaces", run).inspectBaseCommit()).toBe("a".repeat(40));
+    expect(run.mock.calls).toEqual([["git", ["ls-remote", "--exit-code", "origin", "refs/heads/main"],
+      { cwd: "/repo with spaces", encoding: "utf8", timeout: 30_000 }]]);
+  });
+
+  it.each(["", "abc123\trefs/heads/main", `${"a".repeat(40)}\trefs/tags/main`,
+    `${"a".repeat(40)}\trefs/heads/main\n${"b".repeat(40)}\trefs/heads/main`, "remote credentials"])(
+    "fails closed on malformed remote inspection %s", async (stdout) => {
+      const run = vi.fn().mockResolvedValue({ stdout, stderr: "secret" });
+      await expect(new GitWaveBaseProvider("/repo", run).inspectBaseCommit()).rejects.toThrow(
+        /^Unable to inspect origin\/main base commit; check repository and remote access$/,
+      );
+      expect(run).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("does not fall back to fetching or stale local refs on remote inspection failure", async () => {
+    const run = vi.fn().mockRejectedValue(new Error("secret"));
+    await expect(new GitWaveBaseProvider("/repo", run).inspectBaseCommit()).rejects.toThrow("Unable to inspect");
+    expect(run).toHaveBeenCalledOnce();
+  });
+
   it("fetches main before resolving a full commit using argument arrays and an explicit cwd", async () => {
     const run = vi.fn().mockResolvedValueOnce({ stdout: "", stderr: "" })
       .mockResolvedValueOnce({ stdout: `${"a".repeat(40)}\n`, stderr: "" });
@@ -98,7 +122,18 @@ describe("GitWaveBaseProvider", () => {
         })) });
       await commit();
       await git(["push", "origin", "main"], source);
+      const snapshot = async () => Promise.all((await readdir(clone, { recursive: true })).sort().map(async (entry) => {
+        const path = join(clone, entry);
+        return [entry, (await lstat(path)).isFile() ? (await readFile(path)).toString("base64") : null];
+      }));
+      const before = await snapshot();
+      const inspected = await provider.inspectBaseCommit();
+      expect(inspected).toBe((await git(["rev-parse", "HEAD"], source)).stdout.trim());
+      expect(inspected).not.toBe(first);
+      expect(await snapshot()).toEqual(before);
+      expect((await git(["rev-parse", "refs/remotes/origin/main"], clone)).stdout.trim()).toBe(first);
       const second = await provider.captureBaseCommit();
+      expect(second).toBe(inspected);
       expect(second).not.toBe(first);
       expect(second).toBe((await git(["rev-parse", "HEAD"], source)).stdout.trim());
       expect(wave.assignments.map((a) => a.baseCommit)).toEqual([first, first]);

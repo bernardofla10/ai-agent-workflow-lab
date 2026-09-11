@@ -22,9 +22,11 @@ try {
     store, concurrency,
     readyTickets: async () => (await workflowFromEnvironment().getReadyTickets()).tickets,
     captureBaseCommit: () => new GitWaveBaseProvider(root).captureBaseCommit(),
+    inspectBaseCommit: () => new GitWaveBaseProvider(root).inspectBaseCommit(),
     coordinator: new CoordinatorRunner(root),
     dispatch: (id) => executor.dispatch(id),
     preview: (id) => executor.preview(id),
+    previewEphemeral: (run) => executor.previewEphemeral(run),
     supervise: (id) => {
       const repository = githubRepository();
       return new Supervisor(store, new GitHubSupervisionAdapter(repository), new ReviewerRunner(root), repository).supervise(id);
