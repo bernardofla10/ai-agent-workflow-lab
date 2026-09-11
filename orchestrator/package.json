@@ -1,6 +1,7 @@
 {
   "type": "module",
   "scripts": {
+    "runtime": "tsx src/cli/index.ts",
     "mcp": "tsx src/mcp/index.ts",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",

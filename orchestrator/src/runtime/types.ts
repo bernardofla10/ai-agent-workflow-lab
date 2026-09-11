@@ -21,6 +21,29 @@ export const workerResultSchema = z.strictObject({
   ((result.exitCode === null) !== (result.signal === null)), "Invalid Worker process result");
 export type WorkerResult = z.infer<typeof workerResultSchema>;
 
+export const verdictSchema = z.enum(["APPROVE", "REQUEST_CHANGES", "BLOCK"]);
+export const reviewAttemptSchema = z.strictObject({
+  headCommit: baseCommitSchema,
+  state: z.enum(["started", "completed", "failed", "stale"]),
+  verdict: verdictSchema.optional(),
+  reason: z.string().min(1).max(10000).optional(),
+});
+export type ReviewAttempt = z.infer<typeof reviewAttemptSchema>;
+export const supervisionSchema = z.strictObject({
+  headCommit: baseCommitSchema,
+  ciHeadCommit: baseCommitSchema,
+  observedAt: z.iso.datetime(),
+  reviewAttempts: z.array(reviewAttemptSchema),
+  reviewHeadCommit: baseCommitSchema.optional(),
+  mergedBy: z.string().min(1).optional(),
+});
+export const preflightSchema = z.strictObject({
+  kind: z.enum(["manual", "codex"]),
+  baseCommit: baseCommitSchema,
+  candidates: z.array(ticketIdSchema),
+  allowed: z.array(ticketIdSchema),
+});
+
 export const workerAssignmentSchema = z.strictObject({
   ticketId: ticketIdSchema,
   status: executionStatusSchema,
@@ -32,6 +55,9 @@ export const workerAssignmentSchema = z.strictObject({
   reviewerVerdict: z.enum(["APPROVE", "REQUEST_CHANGES", "BLOCK"]).optional(),
   error: z.string().min(1).optional(),
   workerResult: workerResultSchema.optional(),
+  supervision: supervisionSchema.optional(),
+  // Legacy review states cannot identify which head may already have run.
+  reviewUncertain: z.literal(true).optional(),
 });
 export type WorkerAssignment = z.infer<typeof workerAssignmentSchema>;
 
@@ -43,5 +69,6 @@ export const executionRunSchema = z.strictObject({
   candidates: z.array(ticketIdSchema),
   dispatchable: z.array(ticketIdSchema),
   assignments: z.array(workerAssignmentSchema),
+  preflight: preflightSchema.optional(),
 });
 export type ExecutionRun = z.infer<typeof executionRunSchema>;

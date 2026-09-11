@@ -59,8 +59,42 @@ export class StateStore {
     return this.locked(() => this.readRuns());
   }
 
+  // Status/dry-run must not create directories or lock files. Atomic run files
+  // plus two matching reads reject an observed concurrent writer or mixed view.
+  async inspectAll(): Promise<ExecutionRun[]> {
+    for (const path of [this.runtimeDirectory, this.directory]) {
+      try {
+        if (!(await lstat(path)).isDirectory()) throw new Error("Runtime path must be a real directory");
+      } catch (error) {
+        if (error instanceof Error && "code" in error && error.code === "ENOENT") return [];
+        throw error;
+      }
+    }
+    const assertUnlocked = async () => {
+      try { await lstat(join(this.directory, ".lock")); } catch (error) {
+        if (error instanceof Error && "code" in error && error.code === "ENOENT") return;
+        throw error;
+      }
+      throw new Error("Runtime store locked; read again after the writer finishes");
+    };
+    await assertUnlocked();
+    const first = await this.readRuns();
+    const second = await this.readRuns();
+    await assertUnlocked();
+    if (JSON.stringify(first) !== JSON.stringify(second)) throw new Error("Runtime changed during read");
+    return second;
+  }
+
   // Separate from the short state-file lock: held until all dispatched processes
   // settle. A process interruption leaves this lock for manual inspection.
+  async assertExecutionAvailable(): Promise<void> {
+    try { await lstat(join(this.runtimeDirectory, "dispatch.lock")); } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") return;
+      throw error;
+    }
+    throw new Error("Dispatch locked or inaccessible; inspect before dispatching");
+  }
+
   async withDispatchLock<T>(operation: () => Promise<T>): Promise<T> {
     await this.ensureDirectory(this.runtimeDirectory);
     const path = join(this.runtimeDirectory, "dispatch.lock");
@@ -102,6 +136,17 @@ export class StateStore {
             (old.status !== "planned" && next.status === "planned")) {
             throw new Error("Cannot remove, reroute or reactivate an assignment");
           }
+          if (old.supervision) {
+            if (!next.supervision || next.pullRequest !== old.pullRequest) throw new Error("Cannot remove or reroute supervision evidence");
+            for (const attempt of old.supervision.reviewAttempts) {
+              const retained = next.supervision.reviewAttempts.find((entry) => entry.headCommit === attempt.headCommit);
+              if (!retained || (attempt.state !== "started" && retained.state !== attempt.state && retained.state !== "stale") ||
+                (attempt.verdict && (retained.verdict !== attempt.verdict || retained.reason !== attempt.reason))) {
+                throw new Error("Cannot remove or reset a review attempt");
+              }
+            }
+          }
+          if (old.reviewUncertain && !next.reviewUncertain) throw new Error("Cannot clear an uncertain review attempt");
         }
       }
       const added = run.assignments.filter((assignment) =>
