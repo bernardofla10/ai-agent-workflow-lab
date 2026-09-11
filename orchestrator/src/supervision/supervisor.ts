@@ -27,7 +27,8 @@ function observe(assignment: WorkerAssignment, pr: PullRequestSnapshot): void {
   delete assignment.error;
   assignment.pullRequest = pr.number;
   assignment.ciState = pr.ci;
-  assignment.supervision = { headCommit: pr.headCommit, ciHeadCommit: pr.headCommit,
+  assignment.supervision = { identity: { repository: pr.repository, pullRequest: pr.number, nodeId: pr.id },
+    headCommit: pr.headCommit, ciHeadCommit: pr.headCommit,
     observedAt: new Date().toISOString(), reviewAttempts: attempts };
   if (pr.state === "MERGED") {
     if (pr.mergedBy?.type === "User" && pr.mergedBy.login && pr.mergedAt) {
@@ -39,7 +40,7 @@ function observe(assignment: WorkerAssignment, pr: PullRequestSnapshot): void {
 }
 
 function applyVerdict(assignment: WorkerAssignment, verdict: ReviewResult["verdict"]): void {
-  if (!assignment.supervision || assignment.ciState !== "success") throw new Error("Review gate has no current CI evidence");
+  if (!assignment.supervision?.identity || assignment.ciState !== "success") throw new Error("Review gate has no current CI and PR identity evidence");
   assignment.reviewerVerdict = verdict;
   assignment.supervision.reviewHeadCommit = assignment.supervision.headCommit;
   assignment.status = verdict === "APPROVE" ? "waiting_for_human" : verdict === "REQUEST_CHANGES" ? "changes_requested" : "blocked";
@@ -62,18 +63,26 @@ export class Supervisor {
         run = structuredClone(next);
       };
       for (const original of run.assignments) {
+        if (original.reviewUncertain) continue;
         if (!supervisable.has(original.status) && !(original.status === "blocked" &&
-          (original.supervision || original.pullRequest || original.reviewUncertain || original.workerResult?.exitCode === 0))) continue;
+          (original.supervision || original.pullRequest || original.reviewerVerdict || original.workerResult?.exitCode === 0))) continue;
         const assignment = structuredClone(original);
-        if (!original.supervision && ["reviewing", "waiting_for_human", "changes_requested"].includes(original.status)) {
+        if (!original.supervision?.identity && (original.supervision || original.reviewerVerdict ||
+          ["reviewing", "waiting_for_human", "changes_requested"].includes(original.status))) {
           assignment.reviewUncertain = true;
-          block(assignment, "Legacy review state has no head-bound attempt evidence; human inspection required");
+          assignment.status = "blocked";
+          assignment.error = "Legacy review evidence lacks immutable PR identity; manual reconciliation required";
+          // Preserve the original verdict and evidence; never infer an identity
+          // from today's GitHub state or relaunch an uncertain Reviewer.
           await save(assignment);
           continue;
         }
         let identity: PullRequestIdentity | undefined;
         let pr: PullRequestSnapshot | undefined;
         try {
+          if (assignment.supervision?.identity && assignment.supervision.identity.repository !== this.repository) {
+            throw new Error("Configured repository differs from persisted supervision identity");
+          }
           const matches = await this.github.discover(assignment.branch);
           if (matches.length > 1) throw new Error("Ambiguous assignment PRs");
           identity = matches[0];
@@ -98,11 +107,6 @@ export class Supervisor {
           await save(assignment);
         }
         observe(assignment, pr);
-        if (assignment.reviewUncertain && pr.state === "OPEN") {
-          block(assignment, "Uncertain legacy review attempt; no automatic review");
-          await save(assignment);
-          continue;
-        }
         await save(assignment);
         if (pr.state !== "OPEN" || pr.ci !== "success") continue;
         const evidence = assignment.supervision!;
@@ -150,6 +154,9 @@ export class Supervisor {
   }
 
   private async inspect(identity: PullRequestIdentity, assignment: WorkerAssignment): Promise<PullRequestSnapshot> {
+    const persisted = assignment.supervision?.identity;
+    if (persisted && (persisted.repository !== this.repository || persisted.nodeId !== identity.id ||
+      persisted.pullRequest !== identity.number)) throw new Error("Discovered PR differs from persisted immutable identity");
     const pr = await this.github.inspect(identity);
     baseCommitSchema.parse(pr.headCommit);
     if (pr.id !== identity.id || pr.number !== identity.number ||

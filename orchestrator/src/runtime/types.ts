@@ -29,7 +29,14 @@ export const reviewAttemptSchema = z.strictObject({
   reason: z.string().min(1).max(10000).optional(),
 });
 export type ReviewAttempt = z.infer<typeof reviewAttemptSchema>;
+export const supervisionIdentitySchema = z.strictObject({
+  repository: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/),
+  pullRequest: z.number().int().positive().safe(),
+  nodeId: z.string().min(1),
+});
 export const supervisionSchema = z.strictObject({
+  // Optional only so legacy state remains readable for manual reconciliation.
+  identity: supervisionIdentitySchema.optional(),
   headCommit: baseCommitSchema,
   ciHeadCommit: baseCommitSchema,
   observedAt: z.iso.datetime(),

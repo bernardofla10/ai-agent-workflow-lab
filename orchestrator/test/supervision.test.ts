@@ -47,7 +47,7 @@ describe("Supervisor independently observes delivery", () => {
   it("discovers by branch and ignores an untrusted Worker PR number and CI claim", async () => {
     const before = await store.load("run-1");
     const claimed = structuredClone(before);
-    Object.assign(claimed.assignments[0]!, { pullRequest: 999, ciState: "success", reviewerVerdict: "APPROVE" });
+    Object.assign(claimed.assignments[0]!, { pullRequest: 999, ciState: "success" });
     await store.save(claimed, before);
     pr.ci = "pending";
     await supervisor().supervise("run-1");
@@ -70,12 +70,49 @@ describe("Supervisor independently observes delivery", () => {
     review.mockImplementation(async (input) => ({ ...input, verdict, reason: "Evidence" }));
     await supervisor().supervise("run-1");
     expect(await assignment()).toMatchObject({ status, reviewerVerdict: verdict, ciState: "success",
-      supervision: { headCommit: pr.headCommit, ciHeadCommit: pr.headCommit, reviewHeadCommit: pr.headCommit,
+      supervision: { identity: { repository: pr.repository, pullRequest: pr.number, nodeId: pr.id },
+        headCommit: pr.headCommit, ciHeadCommit: pr.headCommit, reviewHeadCommit: pr.headCommit,
         reviewAttempts: [{ state: "completed", headCommit: pr.headCommit, verdict }] } });
     store = new StateStore(repo.repositoryRoot);
     await supervisor().supervise("run-1");
     expect(review).toHaveBeenCalledTimes(1);
     expect((await assignment()).status).toBe(status);
+  });
+
+  it.each([
+    { repository: "other/repo", id: "other-node", number: 42 },
+    { repository: "other/repo", id: "pr-node", number: 42 },
+    { repository: "test/repo", id: "other-node", number: 42 },
+    { repository: "test/repo", id: "pr-node", number: 43 },
+  ].flatMap((identity) => (["OPEN", "MERGED"] as const).map((state) => ({ ...identity, state }))))(
+    "rejects persisted approval reuse after restart with $repository / $id / $number / $state", async (changed) => {
+      await supervisor().supervise("run-1");
+      const approved = await assignment();
+      expect(approved.status).toBe("waiting_for_human");
+      Object.assign(pr, changed, { mergedBy: { type: "User", login: "maintainer" }, mergedAt: "2026-09-11T12:00:00Z" });
+      // Branch and SHA are unchanged, and both repositories may have PR #42.
+      for (let pass = 0; pass < 2; pass++) {
+        store = new StateStore(repo.repositoryRoot);
+        await new Supervisor(store, { discover, inspect }, { review }, pr.repository).supervise("run-1");
+        const rejected = await assignment();
+        expect(rejected.status).toBe("blocked");
+        expect(rejected.reviewerVerdict).toBeUndefined();
+        expect(rejected.supervision?.identity).toEqual(approved.supervision!.identity);
+        expect(rejected.supervision?.reviewAttempts).toEqual(approved.supervision!.reviewAttempts);
+      }
+      expect(review).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("rejects a changed immutable PR node after Reviewer execution", async () => {
+    review.mockImplementation(async (input) => {
+      pr.id = "replacement-node";
+      return { ...input, verdict: "APPROVE", reason: "Same number and head, different PR" };
+    });
+    await supervisor().supervise("run-1");
+    expect(await assignment()).toMatchObject({ status: "blocked",
+      supervision: { identity: { nodeId: "pr-node" }, reviewAttempts: [{ state: "failed" }] } });
+    expect((await assignment()).reviewerVerdict).toBeUndefined();
   });
 
   it("records PR discovery, CI and launch intent before starting Reviewer", async () => {
@@ -171,7 +208,8 @@ describe("Supervisor independently observes delivery", () => {
     const previous = await store.load("run-1");
     const interrupted = structuredClone(previous);
     Object.assign(interrupted.assignments[0]!, { status: "reviewing", pullRequest: pr.number, ciState: "success",
-      supervision: { headCommit: pr.headCommit, ciHeadCommit: pr.headCommit, observedAt: previous.createdAt,
+      supervision: { identity: { repository: pr.repository, pullRequest: pr.number, nodeId: pr.id },
+        headCommit: pr.headCommit, ciHeadCommit: pr.headCommit, observedAt: previous.createdAt,
         reviewAttempts: [{ headCommit: pr.headCommit, state: "started" }] } });
     await store.save(interrupted, previous);
     await supervisor().supervise("run-1");
@@ -188,6 +226,85 @@ describe("Supervisor independently observes delivery", () => {
     await supervisor().supervise("run-1");
     expect((await assignment()).status).toBe("blocked");
     expect(review).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { status: "blocked", verdict: "BLOCK" },
+    { status: "changes_requested", verdict: "REQUEST_CHANGES" },
+    { status: "waiting_for_human", verdict: "APPROVE" },
+    { status: "worker_completed", verdict: "APPROVE" },
+  ].flatMap((legacy) => [false, true].flatMap((headEvidence) =>
+    (["OPEN", "MERGED"] as const).map((state) => ({ ...legacy, headEvidence, state })))))(
+    "preserves legacy $status/$verdict (head evidence=$headEvidence) without advancing to $state", async ({ status, verdict, headEvidence, state }) => {
+      const previous = await store.load("run-1");
+      const legacy = structuredClone(previous);
+      Object.assign(legacy.assignments[0]!, { status, reviewerVerdict: verdict, pullRequest: pr.number, ciState: "success",
+        ...(headEvidence ? { supervision: { headCommit: pr.headCommit, ciHeadCommit: pr.headCommit,
+          reviewHeadCommit: pr.headCommit, observedAt: previous.createdAt,
+          reviewAttempts: [{ headCommit: pr.headCommit, state: "completed", verdict, reason: "Legacy review" }] } } : {}),
+      });
+      await store.save(legacy, previous);
+      pr.state = state;
+      pr.mergedBy = { type: "User", login: "maintainer" };
+      pr.mergedAt = "2026-09-11T12:00:00Z";
+      await supervisor().supervise("run-1");
+      const uncertain = await assignment();
+      expect(uncertain).toMatchObject({ status: "blocked", reviewerVerdict: verdict, pullRequest: pr.number, reviewUncertain: true });
+      expect(uncertain.supervision).toEqual(legacy.assignments[0]!.supervision);
+      expect(uncertain.error).toContain("manual reconciliation");
+      for (let pass = 0; pass < 3; pass++) {
+        store = new StateStore(repo.repositoryRoot);
+        await supervisor().supervise("run-1");
+        expect(await assignment()).toEqual(uncertain);
+      }
+      expect(discover).not.toHaveBeenCalled();
+      expect(inspect).not.toHaveBeenCalled();
+      expect(review).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["repository", "node", "number", "remove"])("forbids rewriting persisted PR identity: %s", async (part) => {
+    await supervisor().supervise("run-1");
+    const previous = await store.load("run-1");
+    const changed = structuredClone(previous);
+    const entry = changed.assignments[0]!;
+    if (part === "repository") entry.supervision!.identity!.repository = "other/repo";
+    if (part === "node") entry.supervision!.identity!.nodeId = "other-node";
+    if (part === "number") {
+      entry.pullRequest = 43;
+      entry.supervision!.identity!.pullRequest = 43;
+    }
+    if (part === "remove") delete entry.supervision!.identity;
+    await expect(store.save(changed, previous)).rejects.toThrow(/immutable|reroute/);
+    expect(await store.load("run-1")).toEqual(previous);
+  });
+
+  it("rejects corrupt identity fields and inconsistent PR numbers", async () => {
+    await supervisor().supervise("run-1");
+    const previous = await store.load("run-1");
+    for (const identity of [
+      { repository: "not-a-repository", nodeId: "pr-node", pullRequest: 42 },
+      { repository: "test/repo", nodeId: "", pullRequest: 42 },
+      { repository: "test/repo", nodeId: "pr-node", pullRequest: 43 },
+    ]) {
+      const changed = structuredClone(previous);
+      changed.assignments[0]!.supervision!.identity = identity;
+      await expect(store.save(changed, previous)).rejects.toThrow();
+    }
+    expect(await store.load("run-1")).toEqual(previous);
+  });
+
+  it("does not infer or attach today's PR identity to legacy review history", async () => {
+    const previous = await store.load("run-1");
+    const legacy = structuredClone(previous);
+    Object.assign(legacy.assignments[0]!, { status: "blocked", reviewerVerdict: "BLOCK", pullRequest: pr.number, ciState: "success",
+      supervision: { headCommit: pr.headCommit, ciHeadCommit: pr.headCommit, reviewHeadCommit: pr.headCommit,
+        observedAt: previous.createdAt, reviewAttempts: [{ headCommit: pr.headCommit, state: "completed", verdict: "BLOCK", reason: "Legacy" }] } });
+    await store.save(legacy, previous);
+    const rebound = structuredClone(legacy);
+    rebound.assignments[0]!.supervision!.identity = { repository: pr.repository, pullRequest: pr.number, nodeId: pr.id };
+    await expect(store.save(rebound, legacy)).rejects.toThrow("legacy evidence cannot be rebound");
+    expect(await store.load("run-1")).toEqual(legacy);
   });
 
   it("does not allow persisted review attempts to be removed or reset", async () => {
@@ -265,6 +382,7 @@ describe("Supervisor independently observes delivery", () => {
 
   it("observes human merge and never invokes a merge operation", async () => {
     await supervisor().supervise("run-1");
+    store = new StateStore(repo.repositoryRoot);
     pr.state = "MERGED";
     pr.mergedBy = { type: "User", login: "maintainer" };
     pr.mergedAt = "2026-09-11T12:00:00Z";

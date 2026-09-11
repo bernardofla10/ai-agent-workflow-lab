@@ -138,6 +138,9 @@ export class StateStore {
           }
           if (old.supervision) {
             if (!next.supervision || next.pullRequest !== old.pullRequest) throw new Error("Cannot remove or reroute supervision evidence");
+            if (JSON.stringify(old.supervision.identity) !== JSON.stringify(next.supervision.identity)) {
+              throw new Error("Supervision repository and PR identity are immutable; legacy evidence cannot be rebound");
+            }
             for (const attempt of old.supervision.reviewAttempts) {
               const retained = next.supervision.reviewAttempts.find((entry) => entry.headCommit === attempt.headCommit);
               if (!retained || (attempt.state !== "started" && retained.state !== attempt.state && retained.state !== "stale") ||

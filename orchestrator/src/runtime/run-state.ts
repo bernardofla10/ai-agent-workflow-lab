@@ -37,7 +37,8 @@ export function parseRun(value: unknown): ExecutionRun {
     const evidence = assignment.supervision;
     if (evidence) {
       unique(evidence.reviewAttempts.map((attempt) => attempt.headCommit), "review attempt");
-      if (!assignment.pullRequest || evidence.ciHeadCommit !== evidence.headCommit ||
+      if (!assignment.pullRequest || (evidence.identity && evidence.identity.pullRequest !== assignment.pullRequest) ||
+        evidence.ciHeadCommit !== evidence.headCommit ||
         (evidence.reviewHeadCommit && evidence.reviewHeadCommit !== evidence.headCommit)) {
         throw new Error("Inconsistent supervision evidence");
       }
