@@ -32,3 +32,6 @@ worktrees/
 
 # Codex / local agent state
 .codex/
+
+# Local orchestration runtime state
+.ai-workflow/
