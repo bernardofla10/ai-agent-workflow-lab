@@ -143,6 +143,18 @@ export class StateStore {
             (old.status !== "planned" && next.status === "planned")) {
             throw new Error("Cannot remove, reroute or reactivate an assignment");
           }
+          if (old.delivery) {
+            const { phase: oldPhase, tree: oldTree, commit: oldCommit, pullRequest: oldPR, ...identity } = old.delivery;
+            if (!next.delivery) throw new Error("Cannot remove delivery intent");
+            const { phase, tree, commit, pullRequest, ...nextIdentity } = next.delivery;
+            const phases = ["intent", "validated", "committed", "pushed", "pr_creating", "complete"];
+            if (JSON.stringify(identity) !== JSON.stringify(nextIdentity) ||
+              phases.indexOf(phase) < phases.indexOf(oldPhase) ||
+              (oldTree && oldTree !== tree) || (oldCommit && oldCommit !== commit) ||
+              (oldPR && JSON.stringify(oldPR) !== JSON.stringify(pullRequest))) {
+              throw new Error("Delivery identity and recorded evidence are immutable");
+            }
+          }
           if (old.supervision) {
             if (!next.supervision || next.pullRequest !== old.pullRequest) throw new Error("Cannot remove or reroute supervision evidence");
             if (JSON.stringify(old.supervision.identity) !== JSON.stringify(next.supervision.identity)) {

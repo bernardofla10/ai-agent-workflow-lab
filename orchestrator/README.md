@@ -369,6 +369,8 @@ npm run orchestrator -- dispatch --run-id run-example --dry-run
 # Only after inspecting the approved dry-run, explicitly start real Workers:
 npm run orchestrator -- dispatch --run-id run-example
 npm run orchestrator -- status --run-id run-example
+# Deliver completed implementations before CI/review supervision:
+npm run orchestrator -- deliver --run-id run-example
 npm run orchestrator -- supervise --run-id run-example
 ```
 
@@ -559,3 +561,100 @@ Live reads span multiple API calls and are not an atomic snapshot. The provider
 uses sequential SDK reads suitable for this small lab; large projects may incur
 latency or rate limits. MCP tools do not modify Linear or GitHub state or dispatch
 agents.
+
+
+## RUN-4: trusted Worker delivery
+
+Orchestrated Workers implement and test, leaving tracked and untracked changes
+in their assigned worktrees. Their prompt explicitly overrides interactive
+commit/push/PR and Linear-update instructions in `agents/worker.md`. Exit zero
+only records `worker_completed`. The Worker never owns delivery or merge.
+
+`DeliveryExecutor` performs a finite `deliver --run-id ID` pass over only
+`worker_completed` assignments. It never invokes dispatch, Codex, Linear, the DAG
+scheduler or worktree creation. `GitDelivery` independently validates the canonical
+repository, registered worktree, branch, base ancestry, conflict/operation markers,
+and index state. Fresh attempts require dirty changes at the exact base commit.
+Unexpected existing commits, remote branches or PRs without intent fail closed.
+
+The executor persists identity before staging, stages tracked and untracked files,
+and runs `npm run lint`, `npm run typecheck`, `npm test`, `npm run build` from the
+assigned `sample-app/`, plus `git diff --check` for both working tree and index.
+Gates must leave the staged content unchanged. Passing evidence binds the exact
+Git tree before commit. Worker-reported results are never delivery evidence.
+
+Git/gh/npm execute with argument arrays, `shell: false`, bounded output/time and
+sanitized Git routing variables. Optional Git index refresh writes are disabled.
+Git hooks and commit signing are disabled for deterministic host delivery. The
+push uses the explicit commit SHA and assignment branch, with no force, tags,
+merge, conflict resolution, branch deletion or worktree cleanup. The effective
+origin push URL must identify `GITHUB_REPOSITORY` on github.com exactly.
+
+### Persistent evidence and recovery
+
+Each assignment may now contain an optional `delivery` object; schema version 1
+and existing runs without it remain readable. Identity includes attempt UUID,
+ticket, GitHub repository, canonical repository root, branch, relative worktree,
+base SHA and effective remote URL. Evidence advances monotonically:
+
+`intent → validated → committed → pushed → pr_creating → complete`
+
+`validated` records the tree that passed local gates. The commit contains the
+attempt UUID. `committed` records the commit SHA. `complete` records the PR number
+and immutable GitHub node ID, alongside assignment `pullRequest` and `pr_open`.
+The state store rejects removing/rebinding intent or changing recorded evidence.
+All saves use the existing atomic, fsynced, compare-and-swap store.
+
+On restart, use the same command and persisted run:
+
+- At base with changes: resume staging/independent validation within the same
+  intent. A previously validated tree cannot be replaced.
+- After commit: prove a clean worktree, exact parent/base, exact validated tree,
+  and exact attempt message. A recorded SHA must also match. Do not recommit or
+  rerun gates on this immutable, already validated commit.
+- After push: query the exact remote ref. If it already equals the proven commit,
+  do not push again. An unexpected or disappeared previously observed remote
+  branch fails closed.
+- Before creating a PR: discover through the existing GitHub supervision adapter.
+  Reuse exactly one matching open PR against `main` at the delivered SHA. After
+  creation, rediscover and inspect independently; gh creation output is ignored.
+- An interrupted PR creation with no discoverable PR is ambiguous. Retrying
+  `deliver` only rediscovers; it never repeats that creation request. If the PR
+  remains absent, human reconciliation is required. No distributed exactly-once
+  guarantee is inferred from a network error.
+
+Delivery, dispatch and supervision share `.ai-workflow/dispatch.lock`. Concurrent
+attempts fail closed. A hard process crash leaves the lock for manual inspection:
+confirm the old runtime and its child processes have stopped before removing an
+abandoned lock. Interrupted store writes also require the existing manual
+lock/temp-file procedure. Never remove live locks or reset assignment/intent
+state to force a retry. Normal command failures release the execution lock and
+preserve the last durable phase. Incomplete delivery cannot enter supervision.
+Once delivered, supervision preserves PR identity and handles subsequent CI,
+review and human merge using RUN-3.
+
+### Recovering the persisted Wave 2 run
+
+After RUN-4 is reviewed and the maintainer chooses to perform delivery, run from
+`orchestrator/` with the existing local `.env` and authenticated Git/gh:
+
+```bash
+npm run orchestrator -- status --run-id run-20260911184915781
+npm run orchestrator -- deliver --run-id run-20260911184915781
+npm run orchestrator -- supervise --run-id run-20260911184915781
+```
+
+`deliver` reuses the existing BER-8 and BER-9 worktrees and base SHA. It does not
+redispatch either Worker or require a new preflight. No Wave 2 delivery command
+was run during RUN-4 implementation or tests; the recovery regression uses
+synthetic copies of these identifiers in temporary repositories with fake npm
+and GitHub integrations and a local bare Git remote.
+
+Limits: V1 delivery gates target application tickets in `sample-app/`; dependencies
+must already be installed. The repository and local programs are trusted; this
+is not isolation from hostile code or external writers. Submodules, sparse or
+hidden index entries, symlinked directories, noncanonical roots, non-github.com
+remotes and ambiguous histories require human handling. Generated tracked or
+untracked changes during gates fail closed. PR text identifies the ticket and
+automated validation but is generic; independent review must assess scope and
+behavior. No Worker/Reviewer retries, deployment, cleanup or automatic merge.

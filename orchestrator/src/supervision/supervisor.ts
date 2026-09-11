@@ -63,7 +63,7 @@ export class Supervisor {
         run = structuredClone(next);
       };
       for (const original of run.assignments) {
-        if (original.reviewUncertain) continue;
+        if (original.reviewUncertain || (original.delivery && original.delivery.phase !== "complete")) continue;
         if (!supervisable.has(original.status) && !(original.status === "blocked" &&
           (original.supervision || original.pullRequest || original.reviewerVerdict || original.workerResult?.exitCode === 0))) continue;
         const assignment = structuredClone(original);
@@ -154,6 +154,9 @@ export class Supervisor {
   }
 
   private async inspect(identity: PullRequestIdentity, assignment: WorkerAssignment): Promise<PullRequestSnapshot> {
+    const delivery = assignment.delivery;
+    if (delivery && (delivery.repository !== this.repository || delivery.pullRequest?.nodeId !== identity.id ||
+      delivery.pullRequest.number !== identity.number)) throw new Error("PR differs from trusted delivery identity");
     const persisted = assignment.supervision?.identity;
     if (persisted && (persisted.repository !== this.repository || persisted.nodeId !== identity.id ||
       persisted.pullRequest !== identity.number)) throw new Error("Discovered PR differs from persisted immutable identity");

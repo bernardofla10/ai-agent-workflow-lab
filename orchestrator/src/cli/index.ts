@@ -1,3 +1,6 @@
+import { DeliveryExecutor } from "../delivery/delivery-executor.js";
+import { GitDelivery } from "../delivery/git-delivery.js";
+import { GitHubDeliveryAdapter } from "../delivery/github-delivery.js";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { githubRepository, loadRuntimeEnvironment } from "../config/environment.js";
@@ -28,6 +31,11 @@ try {
     dispatch: (id) => executor.dispatch(id),
     preview: (id) => executor.preview(id),
     previewEphemeral: (run) => executor.previewEphemeral(run),
+    deliver: (id) => {
+      const repository = githubRepository();
+      const github = new GitHubDeliveryAdapter(repository, root, new GitHubSupervisionAdapter(repository));
+      return new DeliveryExecutor(store, new GitDelivery(root), github, repository).deliver(id);
+    },
     supervise: (id) => {
       const repository = githubRepository();
       return new Supervisor(store, new GitHubSupervisionAdapter(repository), new ReviewerRunner(root), repository).supervise(id);

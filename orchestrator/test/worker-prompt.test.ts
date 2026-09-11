@@ -13,7 +13,10 @@ describe("WorkerPromptBuilder", () => {
     expect(prompt).toContain("Do not inspect other Workers' worktrees");
     expect(prompt).toContain("Do not modify Linear, including issue status");
     expect(prompt).toContain("Never merge");
-    expect(prompt.length).toBeLessThan(800);
+    expect(prompt).toContain("Orchestrated Delivery Mode overrides the interactive delivery steps");
+    expect(prompt).toContain("Do not commit. Do not push. Do not create Pull Requests.");
+    expect(prompt).toContain("Leave validated changes in the assigned working tree");
+    expect(prompt.length).toBeLessThan(1200);
   });
 
   it("varies only by issue ID and contains no copied ticket requirements", () => {
