@@ -54,6 +54,21 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes bubblewrap
+          # Permit namespace creation only for bwrap on the disposable runner.
+          # Keep Ubuntu's system-wide unprivileged-userns restriction enabled.
+          sudo tee /etc/apparmor.d/run4-bwrap > /dev/null <<'PROFILE'
+          abi <abi/4.0>,
+          include <tunables/global>
+          profile run4-bwrap /usr/bin/bwrap flags=(unconfined) {
+            userns,
+          }
+          PROFILE
+          sudo apparmor_parser --replace /etc/apparmor.d/run4-bwrap
+      - name: Verify sandbox namespaces
+        run: >-
+          bwrap --unshare-user --unshare-pid --unshare-net
+          --ro-bind /usr /usr --ro-bind /bin /bin --ro-bind /lib /lib
+          --ro-bind-try /lib64 /lib64 --proc /proc --dev /dev -- /usr/bin/true
       - run: npm ci
       - run: npm run lint
       - run: npm run typecheck

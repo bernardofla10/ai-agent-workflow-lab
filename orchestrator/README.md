@@ -679,8 +679,12 @@ and GitHub integrations and a local bare Git remote.
 Limits: V1 delivery requires Linux, Bubblewrap on PATH, unprivileged user
 namespaces, and a Node distribution with npm at `../lib/node_modules/npm` relative
 to the Node binary directory (for example nvm or actions/setup-node). Install
-Bubblewrap with `sudo apt-get install bubblewrap` on Ubuntu. CI installs it and
-runs required real sandbox regressions; unsupported isolation is never silently
+Bubblewrap with `sudo apt-get install bubblewrap` on Ubuntu. Ubuntu's AppArmor
+policy must also permit user namespaces for the installed bwrap binary; see the
+[Ubuntu namespace policy](https://discourse.ubuntu.com/t/understanding-apparmor-user-namespace-restriction/58007).
+CI installs a bwrap-specific profile on its disposable runner, verifies namespace
+startup and runs required real sandbox regressions. It keeps the system-wide
+restriction enabled. Unsupported isolation is never silently
 skipped. Application dependencies must already be installed. Gates cannot use
 network services or host-only configuration. The host toolchain, Git configuration
 and orchestrator are trusted; concurrent external host writers remain unsupported.
