@@ -154,6 +154,103 @@ returned as `blocks`, even when its source is done.
 It does not reinterpret `related` links using UI assumptions or issue prose.
 Fixtures cover retention of incoming `blocks` links and exclusion of `related`.
 
+## Runtime planning (RUN-1)
+
+The [repository-local task](../docs/tasks/run-01-runtime-planning.md) adds library
+APIs for persistent runs and pure dispatch planning. Existing MCP tools retain
+their read-only contracts. There is no dispatch CLI or execution loop yet.
+
+```ts
+import { resolve } from "node:path";
+import { DispatchPlanner } from "./src/dispatch/dispatch-planner.js";
+import { GitWaveBaseProvider } from "./src/integrations/git/wave-base.js";
+import { maxConcurrencyFromEnvironment } from "./src/runtime/run-state.js";
+import { StateStore } from "./src/runtime/state-store.js";
+
+// Run this example from orchestrator/. Use the same repository root and limit
+// for every planner/store instance belonging to this repository.
+const repositoryRoot = resolve("..");
+const limit = maxConcurrencyFromEnvironment(); // MAX_CONCURRENCY, default 2
+const store = new StateStore(repositoryRoot, limit);
+const existingRuns = await store.loadAll();
+const baseCommit = await new GitWaveBaseProvider(repositoryRoot).captureBaseCommit();
+const run = new DispatchPlanner(limit).plan({
+  id: "run-20260911-01", // caller-owned unique ID; use a new ID for each new wave
+  createdAt: "2026-09-11T10:00:00.000Z",
+  baseCommit,
+  readyTickets: [{ id: "BER-8", title: "Persistent audit events", status: "backlog", blockedBy: [] }],
+  existingRuns,
+});
+await store.save(run); // commit reservations before any future execution
+
+// After restart, load the existing run instead of planning it again.
+const previous = await store.load(run.id);
+// A future executor records observed status changes using a copied snapshot:
+const updated = structuredClone(previous);
+// updated.assignments[0].status = observedStatus;
+await store.save(updated, previous); // rejects stale snapshots
+```
+
+Production callers obtain `readyTickets` from `WorkflowService.getReadyTickets()`;
+the inline ticket above only illustrates the input shape. The planner trusts the
+supplied ready set and does not recalculate the DAG or perform semantic preflight.
+It validates ticket identifiers and backlog status, orders IDs by code-point
+comparison, removes reserved tickets, and selects assignments up to the remaining
+capacity. `dispatchable` includes eligible tickets beyond current capacity;
+only `assignments` reserves tickets. Inputs are not mutated. Run ID, timestamp,
+SHA and existing state are explicit inputs, making repeated planning deterministic.
+
+`GitWaveBaseProvider` is separate from the planner. It runs `git fetch origin`
+with an explicit main refspec (also refreshing restricted clones), followed by
+`git rev-parse --verify origin/main^{commit}`. It uses argument arrays, an explicit
+repository directory, and a timeout. Fetch/ref failures abort capture. Persisted
+bases accept full SHA-1/SHA-256 object IDs only; abbreviated examples like
+`abc123` and symbolic refs are rejected. All assignments must match the run's base.
+The planner validates SHA syntax; the Git adapter establishes its origin. On
+resume, use the stored SHA without fetching a replacement for that run.
+
+Branches use `feat/<lowercase-ticket-id>-<sanitized-title>`; titles are normalized
+to bounded ASCII slugs, falling back to `task`. IDs must be canonical uppercase
+issue identifiers such as `BER-8`. Paths are exactly
+`../ai-agent-workflow-worktrees/<lowercase-ticket-id>`, interpreted relative to the
+repository root, never the current working directory. Neither directory nor
+worktree is created by planning. Actual Git/worktree availability checks belong
+to the future executor.
+
+Every status except `merged` retains the ticket reservation and a concurrency
+slot, including `planned`, `failed`, `blocked`, and `waiting_for_human`. This is
+deliberately conservative: failure does not prove execution stopped. No automatic
+retry or reservation cleanup exists. `merged` is a record of external human
+action, never an instruction to merge. The store models Worker/PR/CI/review data
+but does not enforce a full lifecycle transition graph or verify external status.
+
+State is versioned JSON in ignored `.ai-workflow/runs/<run-id>.json`. Always load
+the full store before planning, save successfully before execution, and use one
+consistent concurrency configuration per repository. Creation rejects existing
+IDs; updates require the exact previously loaded snapshot. Metadata and existing
+assignment routing cannot change, assignments cannot disappear, and merged
+assignments cannot reactivate. The store checks global duplicates and capacity
+under an exclusive local lock, preventing competing plans from reserving the same
+ticket or exceeding the limit. Lowering the limit stops new reservations but
+still permits updates to existing runs.
+
+Writes use a synced temporary file, atomic rename, and directory sync on the
+local filesystem. Loads validate all runs, including their filenames and cross-run
+consistency; a corrupt sibling run also blocks loading an otherwise valid run.
+Unknown schema fields/versions, unsafe paths, symlinks at runtime directories or
+state files, leftover temp files, and held locks fail closed. Errors do not replace
+corrupt state with an empty run. The storage directory is trusted local state;
+this is not a distributed scheduler or protection against a hostile local user.
+
+If a process is interrupted while holding `.ai-workflow/runs/.lock`, subsequent
+operations stop. Stop all orchestrator writers, inspect the JSON and any `.tmp`
+file, preserve a backup, and reconcile reservations against actual external
+execution before removing the abandoned lock/temp file. Never remove an active
+writer's lock or clear reservations simply to force another dispatch. A clean
+restart reads existing runs normally; interrupted writes require this manual
+recovery. Failures after rename may already have committed the snapshot: reload
+and reconcile rather than blindly retrying the old write.
+
 ## Validation
 
 Run from `orchestrator/`:
@@ -172,7 +269,11 @@ normalization, and real stdio MCP discovery/calls/output/error recovery. The npm
 entry-point test runs outside the project directory with credentials explicitly
 unset. Existing graph tests remain unchanged.
 
-Final local validation passed: lint, typecheck, all 82 tests across five files,
+RUN-1 tests additionally cover deterministic planning and capacity, restart and
+duplicate reservations, corrupt state and write conflicts, and a real local Git
+remote advancing while an existing wave retains its captured base.
+
+Final local validation passed: lint, typecheck, all 185 tests across eight files,
 build, and `git diff --check`.
 
 Live validation on 2026-09-09 through ai-workflow MCP with `.env` loaded at startup:
