@@ -19,6 +19,8 @@ export class GitHubDeliveryAdapter implements DeliveryGitHub {
     workerAssignmentSchema.parse(assignment);
     const body = `Automated trusted delivery for Linear issue ${assignment.ticketId}.
 
+Fixes ${assignment.ticketId}
+
 Problem: deliver the completed implementation for ${assignment.ticketId} from its assigned worktree.
 Implementation: the validated tracked and untracked changes in this delivery commit.
 Out of scope: other tickets, retries, deployment and automatic merge.
