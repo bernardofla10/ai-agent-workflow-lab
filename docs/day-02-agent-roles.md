@@ -1,5 +1,9 @@
 # Day 02 — Codex Agent Roles
 
+> Historical study note: this describes the state and findings at this stage of
+> the lab. For current behavior and commands, see the [repository overview](../README.md)
+> and [runtime reference](../orchestrator/README.md).
+
 ## Goal
 
 Define clear and independent Codex roles for planning, implementation, and review, then execute the first complete agent workflow on a minimal application bootstrap.
@@ -273,6 +277,12 @@ The three roles have intentionally different authority:
 | Open PR | ❌ | ✅ | ❌ | ✅ |
 | Review PR | Supervisory | ❌ | ✅ | ✅ |
 | Merge | ❌ | ❌ | ❌ | ✅ |
+
+This table describes the interactive workflow used on Day 2. In the current
+orchestrated mode, the Worker leaves changes in its worktree and the trusted host
+owns commit, push and PR creation. DAG calculation is deterministic; the
+Coordinator evaluates semantic readiness. The Reviewer returns a structured
+verdict without writing to GitHub.
 
 The separation reduces self-confirmation by implementation agents.
 

@@ -1,5 +1,9 @@
 # Day 05 — MCP Integrations with Linear and GitHub
 
+> Historical study note: this describes the state and findings at this stage of
+> the lab. For current behavior and commands, see the [repository overview](../README.md)
+> and [runtime reference](../orchestrator/README.md).
+
 ## Goal
 
 Connect the deterministic DAG scheduler to real external systems and expose the

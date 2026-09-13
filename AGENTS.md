@@ -12,7 +12,7 @@ The purpose is not only to produce working code. Changes must remain **small, re
 
 * **`sample-app/`** — Contains the application used by coding-agent experiments.
 * **`agents/`** — Contains role contracts for Coordinator, Worker, and Reviewer agents.
-* **`orchestrator/`** — Will contain the TypeScript orchestration system.
+* **`orchestrator/`** — Contains the TypeScript scheduler, MCP server, and persistent execution runtime.
 * **`docs/`** — Contains study notes and architecture documentation.
 
 ---

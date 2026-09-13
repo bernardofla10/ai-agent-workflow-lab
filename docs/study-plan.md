@@ -1,5 +1,9 @@
 # AI Agent Workflow — Study Plan
 
+> Completed study record. Results below are snapshots from each day, not live
+> project status. Current operation is documented in the [repository overview](../README.md)
+> and [runtime reference](../orchestrator/README.md).
+
 ## Objective
 
 Build and validate a minimal AI-native software engineering orchestration system using:
