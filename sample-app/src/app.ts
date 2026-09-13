@@ -1,9 +1,11 @@
 import express from 'express';
 
+import { JsonLinesAuditStore } from './audit-store.js';
 import { requestId } from './request-id.js';
 import { requestLogging } from './request-logging.js';
 
 export const app = express();
+const auditStore = new JsonLinesAuditStore();
 
 const metrics = {
   totalRequests: 0,
@@ -34,6 +36,22 @@ app.use((request, response, next) => {
 
 app.get('/metrics', (_request, response) => {
   response.json(metrics);
+});
+
+app.get('/operations/summary', async (_request, response) => {
+  const currentMetrics = { ...metrics };
+  const totalEvents = await auditStore.count();
+  const recentEvents = await auditStore.listRecent(5);
+
+  response.json({
+    metrics: currentMetrics,
+    audit: {
+      totalEvents,
+      recentEvents: recentEvents.map(({ id, requestId, type, timestamp }) => ({
+        id, requestId, type, timestamp,
+      })),
+    },
+  });
 });
 
 app.get('/', (_request, response) => {
