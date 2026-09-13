@@ -1,5 +1,9 @@
 # Day 04 — Deterministic DAG Scheduling and Execution Waves
 
+> Historical study note: this describes the state and findings at this stage of
+> the lab. For current behavior and commands, see the [repository overview](../README.md)
+> and [runtime reference](../orchestrator/README.md).
+
 ## Goal
 
 Replace manual dependency reasoning with deterministic and testable scheduling logic. 
@@ -54,14 +58,17 @@ Before scheduling, the orchestrator validates that:
 * Ticket IDs are unique.
 * Every dependency references an existing ticket.
 
-*Any invalid graph input fails immediately before scheduling begins.*
+*Duplicate IDs and unknown dependency references fail before readiness filtering.*
 
 ### 2. Cycle Detection
-Dependency cycles are strictly rejected. For example:
+The cycle detector and `calculateWaves()` reject dependency cycles. For example:
 ```text
 A ➔ B ➔ C ➔ A
 ```
-No ticket in this cycle can ever become ready. Cycle detection is entirely deterministic and does not rely on an LLM.
+A cycle prevents a valid topological wave calculation. Cycle detection is entirely
+deterministic and does not rely on an LLM. `getReadyTickets()` validates IDs and
+dependency references, then filters by status; it does not invoke cycle detection.
+Its output alone is not proof that the complete graph is acyclic.
 
 ### 3. Execution Waves
 Topological scheduling groups tickets that can begin at the same dependency level. For example:
@@ -92,7 +99,9 @@ A ticket is operationally **ready** only when it satisfies the following strict 
 status == backlog  AND  every blocker status == done
 ```
 
-> 🚫 **Workflow Rule:** An `in_review` dependency is not considered complete. Dependencies are only satisfied after code is safely merged into `main`.
+> 🚫 **Workflow Rule:** An `in_review` dependency is not considered complete. The scheduler trusts normalized Linear `done` status; it does not inspect Git.
+> Semantic preflight checks prerequisite code, and the runtime reconciles Linear
+> completion after observing a human merge.
 
 ---
 
@@ -112,7 +121,7 @@ BER-11 ──┬──➔ BER-5 ──┬──➔ BER-9  ──┐
 * **Wave 2:** `BER-8`, `BER-9`
 * **Wave 3:** `BER-10`
 
-### Current Operational State
+### Operational State at Day 4
 * ✅ **Done:** `BER-11`, `BER-5`, `BER-6`, `BER-7`
 * ⏳ **Backlog:** `BER-8`, `BER-9`, `BER-10`
 

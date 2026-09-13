@@ -1,5 +1,13 @@
 # RFC-001 — Runtime Orchestration
 
+## Status
+
+Implemented and extended by RUN-1 through RUN-5. The proposal below preserves
+its original context. The current runtime includes trusted delivery between
+Worker completion and PR supervision, manual or Codex semantic preflight, and
+Linear completion reconciliation after human merge. See the
+[runtime reference](../../orchestrator/README.md) for current commands and limits.
+
 ## Context
 
 The workflow already supports deterministic DAG scheduling, Linear/GitHub

@@ -1,4 +1,42 @@
-# Sample application audit storage
+# Sample application
+
+The Express sample application contains the completed BER-5 through BER-10
+features used to exercise the agent workflow.
+
+## Run and validate
+
+From `sample-app/`:
+
+```bash
+npm ci
+npm run dev
+```
+
+For a compiled server, run `npm run build` followed by `npm start`. Required
+validation is `npm run lint`, `npm run typecheck`, `npm test` and `npm run build`.
+
+## HTTP behavior
+
+| Route | Response |
+| --- | --- |
+| `GET /` | Application name and `status: "running"`. |
+| `GET /health` | `{ "status": "ok" }`. |
+| `GET /ready` | `{ "status": "ready" }`; readiness is static. |
+| `GET /metrics` | Process-local `totalRequests`, `serverErrors`, `healthRequests` and `readinessRequests` counters. |
+| `GET /operations/summary` | `{ metrics, audit: { totalEvents, recentEvents } }`, including up to five most recently appended audit events. |
+
+Request-ID middleware preserves a non-empty `X-Request-ID` or generates a UUID,
+stores it on `req.requestId` and returns it in the response header. Structured
+logging emits one completion event per finished HTTP response, without query
+parameters in its path.
+
+Metrics increment when the response finishes, including metrics/summary requests;
+the response snapshot does not include that request's own completion increment.
+Counters reset with the process. The summary captures metrics before reading
+audit count and recent events; the two storage reads are not an atomic snapshot.
+Audit read errors propagate to Express error handling.
+
+## Audit storage
 
 BER-8 provides `AuditEvent`, `createAuditEvent(requestId, type)` and an asynchronous
 `AuditStore` interface implemented by `JsonLinesAuditStore`.
@@ -15,7 +53,8 @@ const recent = await store.listRecent(10);
 
 Import the factory from `src/audit-event.ts` and the store types/implementation
 from `src/audit-store.ts` (use `.js` imports in TypeScript, as elsewhere here).
-No audit HTTP endpoint or automatic HTTP-completion auditing is installed.
+`GET /operations/summary` reads this storage. There is no HTTP endpoint for
+creating audit events and no automatic HTTP-completion auditing.
 
 The default path is `data/audit-events.jsonl`, relative to the process working
 directory; run the application from `sample-app/`. Pass a file path to the

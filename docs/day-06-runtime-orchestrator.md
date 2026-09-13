@@ -1,5 +1,9 @@
 # Day 06 — Runtime Orchestrator
 
+> Historical study note: this describes the state and findings at this stage of
+> the lab. For current behavior and commands, see the [repository overview](../README.md)
+> and [runtime reference](../orchestrator/README.md).
+
 ## Goal
 
 Turn the read-only workflow engine into a resumable runtime orchestrator capable of planning execution, creating isolated worktrees, launching Codex Workers, supervising Pull Requests and CI, running independent Codex Reviewers, and stopping at a human-only merge gate.
@@ -11,11 +15,11 @@ Linear
   ↓
 Deterministic Scheduler
   ↓
+Dispatch Planner and Persisted Run
+  ↓
 Coordinator Semantic Preflight
   ↓
-Persisted Run
-  ↓
-Dispatch Planner
+Approved Run
   ↓
 Git Worktrees
   ↓
@@ -326,9 +330,11 @@ The runtime exposes:
 
 ```text
 plan
+preflight
 dispatch --dry-run
 dispatch
 status
+deliver
 supervise
 ```
 
@@ -416,7 +422,12 @@ It does not mean:
 
 The trusted host owns privileged deterministic actions.
 
-Delivery is restart-safe and detects both tracked and untracked implementation changes.
+Delivery persists staged-tree validation and remote evidence, and detects both
+tracked and untracked implementation changes. Quality gates run against a
+disposable staged-source copy inside Bubblewrap, without host credentials or
+network access. Only the application gates run during delivery; CI validates
+both packages. Resume is conservative: ambiguous PR creation or interrupted
+locks require human inspection, not an automatic retry.
 
 It avoids:
 

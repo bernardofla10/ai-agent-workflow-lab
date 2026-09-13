@@ -1,5 +1,9 @@
 # Day 01 — Linear, Executable Tickets and MCP
 
+> Historical study note: this describes the state and findings at this stage of
+> the lab. For current behavior and commands, see the [repository overview](../README.md)
+> and [runtime reference](../orchestrator/README.md).
+
 ## Goal
 
 Build the specification layer of the AI-native engineering workflow. The goal was to create a Linear project whose tickets can be executed by autonomous coding agents without relying on implicit context.

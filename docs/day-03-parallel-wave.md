@@ -1,5 +1,9 @@
 # Day 03 — Parallel Codex Workers and Wave Execution
 
+> Historical study note: this describes the state and findings at this stage of
+> the lab. For current behavior and commands, see the [repository overview](../README.md)
+> and [runtime reference](../orchestrator/README.md).
+
 ## Goal
 
 Execute the first real dependency wave using multiple independent Codex Workers running in isolated Git worktrees.

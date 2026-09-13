@@ -4,6 +4,14 @@ The runtime connects the deterministic scheduler to persistent planning, local
 Worker dispatch and independent delivery supervision. The separate MCP server
 exposes read-only Linear/GitHub tools; it does not dispatch agents.
 
+The implemented lifecycle is planning → semantic preflight → dispatch → trusted
+delivery → CI/review supervision → human merge → Linear reconciliation. Commands
+perform finite passes; rerun supervision to observe changes and explicitly plan a
+new run for subsequent work. There is no polling daemon or automatic next wave.
+The RUN sections describe components introduced in successive work items; their
+current behavior is documented below. See the [repository overview](../README.md)
+for responsibilities and the completed lab outcome.
+
 ## Architecture
 
 - `src/integrations/linear/ticket-provider.ts`: `@linear/sdk` project reads,
@@ -15,6 +23,15 @@ exposes read-only Linear/GitHub tools; it does not dispatch agents.
 - `src/mcp/server.ts`: tool registration with explicit Zod input/output schemas.
 - `src/mcp/index.ts`: stdio entry point using the MCP TypeScript v2 server package.
 - `src/config/`: environment configuration, resolved separately for each provider.
+- `src/cli/`: command parsing, environment loading and runtime adapter wiring.
+- `src/dispatch/`: planning, semantic preflight, Worker prompts and execution.
+- `src/runtime/`: validated run schemas, reservations, atomic state and locks.
+- `src/integrations/git/`: exact wave bases and isolated worktree management.
+- `src/delivery/`: staged-source sandbox validation, Git delivery and PR creation.
+- `src/supervision/`: finite PR/CI observation and independent Reviewer execution.
+- `src/integrations/github/supervision-adapter.ts`: immutable PR identity and
+  required-check evidence, separate from the simpler MCP PR status adapter.
+- `src/integrations/linear/completion-adapter.ts`: post-merge completion updates.
 
 The server uses `@modelcontextprotocol/server` v2 and its public `stdio` export,
 with `McpServer.registerTool` and `serveStdio`. It does not use the v1 monolithic
@@ -23,9 +40,13 @@ See the [v2 SDK documentation](https://ts.sdk.modelcontextprotocol.io/v2/).
 
 ## Configuration and startup
 
-Install dependencies with `npm ci` from `orchestrator/`. Validation used Node.js
-24, which supports the locked dependencies, and an installed, authenticated
-GitHub CLI (`gh auth status`).
+Install dependencies with `npm ci` from `orchestrator/`. The repository CI pins
+Node.js 22.23.2 for both packages; earlier integration validation used Node.js 24.
+GitHub operations require an installed, authenticated GitHub CLI (`gh auth status`).
+Worker execution requires Codex authentication and configured Linear MCP access;
+Coordinator/Reviewer processes also need their live read integrations. Delivery
+requires preinstalled `sample-app/node_modules` and the Linux/Bubblewrap setup
+in the trusted delivery section below.
 
 Set these environment variables in the process launching the MCP server:
 
@@ -34,6 +55,12 @@ Set these environment variables in the process launching the MCP server:
 | `LINEAR_API_KEY` | Linear API key with read access to the project. |
 | `LINEAR_PROJECT_ID` | UUID of the AI Workflow Lab project. |
 | `GITHUB_REPOSITORY` | GitHub repository in `owner/repository` format. |
+
+The runtime additionally reads `MAX_CONCURRENCY` (positive integer, default `2`)
+and `LINEAR_DONE_STATE_ID` (a completed state in the issue's team, required to
+transition an unfinished issue after merge). Linear completion requires write
+access; the MCP server's Linear operations remain read-only. An already completed
+issue needs no mutation or configured target state.
 
 `.env.example` contains only empty variable assignments. No credentials or project
 values are embedded in code. A local `.env` is ignored by Git. The MCP server does
@@ -159,8 +186,9 @@ Fixtures cover retention of incoming `blocks` links and exclusion of `related`.
 
 The [repository-local task](../docs/tasks/run-01-runtime-planning.md) adds library
 APIs for persistent runs and pure dispatch planning. Existing MCP tools retain
-their read-only contracts. Execution uses the separate RUN-2 library below;
-there is no dispatch CLI or MCP endpoint.
+their read-only contracts. The CLI described under RUN-3 composes planning and
+execution; no dispatch MCP endpoint exists. The following example shows only the
+planning library. Use the CLI/preflight flow below for approved execution.
 
 ```ts
 import { resolve } from "node:path";
@@ -187,7 +215,7 @@ await store.save(run); // commit reservations before any future execution
 
 // After restart, load the existing run instead of planning it again.
 const previous = await store.load(run.id);
-// A future executor records observed status changes using a copied snapshot:
+// Runtime executors record observed status changes using a copied snapshot:
 const updated = structuredClone(previous);
 // updated.assignments[0].status = observedStatus;
 await store.save(updated, previous); // rejects stale snapshots
@@ -277,7 +305,10 @@ The [RUN-2 task](../docs/tasks/run-02-worker-dispatch.md) adds four components:
   concurrency limit. It loads the complete validated RUN-1 store, processes only
   persisted `planned` assignments, and records transitions with fresh snapshots.
 
-Library integration, after the caller has explicitly selected and persisted a run:
+Library integration, after the caller has explicitly selected and persisted an
+approved run. The CLI enforces the presence of preflight before dispatch; the
+low-level `DispatchExecutor` honors an existing approval but also accepts runs
+without one for library compatibility. Direct callers must enforce that prerequisite:
 
 ```ts
 import { CodexRunner } from "./src/integrations/codex/codex-runner.js";
@@ -293,7 +324,7 @@ const result = await executor.dispatch(existingRunId);
 // Do not log raw Worker output without inspecting it for sensitive content.
 ```
 
-The installed `codex-cli 0.154.0` was inspected with `codex --help`,
+During RUN-2 implementation, `codex-cli 0.154.0` was inspected with `codex --help`,
 `codex exec --help`, and a help-only check of the combined options. The adapter
 spawns `codex` with the following argument array and the assignment's absolute
 worktree path as the process `cwd`:
@@ -344,9 +375,10 @@ This implementation targets a trusted POSIX local filesystem and the canonical
 main checkout (a real `.git` directory). Linked worktrees cannot serve as the
 orchestrator root. Dispatch must use this executor and the same repository root;
 calling the low-level runner directly bypasses dispatch coordination. RUN-3 below
-adds PR/CI supervision and independent review. There is no Linear write
-integration, automatic merge, or retry/recovery command. BER-8 and BER-9 were not
-dispatched during implementation.
+provides PR/CI supervision and independent review. Trusted delivery owns commit,
+push and PR creation; merge reconciliation can update Linear completion. Dispatch
+itself does not write Linear. There is no automatic merge or agent retry command.
+BER-8 and BER-9 were later executed in the completed end-to-end lab.
 
 ## RUN-3: supervision and CLI
 
@@ -479,7 +511,7 @@ evidence. Only observed human merge releases the RUN-1 reservation.
 
 ### Structured Codex strategy and limits
 
-Inspected CLI: `codex 0.154.0`, `codex exec --help`. Coordinator and Reviewer run
+CLI inspected during RUN-3: `codex 0.154.0`, `codex exec --help`. Coordinator and Reviewer run
 fresh processes using argument arrays, literal stdin and repository-root cwd:
 
 ```text
@@ -495,9 +527,11 @@ invalid JSON fails closed, with no retry or automatic prose fallback. Manual
 Coordinator preflight remains available if structured execution is unavailable.
 No `resume`, Worker transcript, ticket-specific acceptance criteria or duplicated
 scope is included. Prompts require live Linear/GitHub reads, applicable role
-instructions, independence and no merge. Existing Worker invocation is unchanged.
+instructions, independence and no merge. The Reviewer returns its verdict to the
+runtime; it does not publish a GitHub review or comment. Existing Worker invocation
+is unchanged.
 
-Dispatch and supervision share the exclusive execution lock; Reviewers run
+Dispatch, delivery and supervision share the exclusive execution lock; Reviewers run
 sequentially, so supervision never adds parallel processes beyond the configured
 limit. Status can inspect persisted progress while that lock is held. A crash
 leaves the lock and durable attempt for human inspection; there is no lock
@@ -659,10 +693,13 @@ preserve the last durable phase. Incomplete delivery cannot enter supervision.
 Once delivered, supervision preserves PR identity and handles subsequent CI,
 review and human merge using RUN-3.
 
-### Recovering the persisted Wave 2 run
+### Historical Wave 2 recovery
 
-After RUN-4 is reviewed and the maintainer chooses to perform delivery, run from
-`orchestrator/` with the existing local `.env` and authenticated Git/gh:
+The following commands were the recovery path for the existing Wave 2 run after
+RUN-4. Wave 2 has since completed (BER-8: PR #19; BER-9: PR #20), followed by Wave 3
+(BER-10: PR #23). These identifiers are historical examples, not pending work.
+For another interrupted delivery, use its own persisted run ID and inspect its
+state before resuming. The commands run from `orchestrator/`:
 
 ```bash
 npm run orchestrator -- status --run-id run-20260911184915781
@@ -670,9 +707,9 @@ npm run orchestrator -- deliver --run-id run-20260911184915781
 npm run orchestrator -- supervise --run-id run-20260911184915781
 ```
 
-`deliver` reuses the existing BER-8 and BER-9 worktrees and base SHA. It does not
-redispatch either Worker or require a new preflight. No Wave 2 delivery command
-was run during RUN-4 implementation or tests; the recovery regression uses
+For `worker_completed` assignments, `deliver` reuses the persisted worktrees and
+base SHA without redispatch or a new preflight. It skips already merged
+assignments. No Wave 2 delivery command was run during RUN-4 implementation or tests; the recovery regression uses
 synthetic copies of these identifiers in temporary repositories with fake npm
 and GitHub integrations and a local bare Git remote.
 
