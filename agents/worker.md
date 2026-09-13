@@ -130,3 +130,32 @@ Do not silently choose one conflicting instruction.
 
 After clarification, continue from the existing worktree unless repository
 state makes doing so unsafe.
+
+## Orchestrated Delivery Mode
+
+When the dispatch prompt explicitly declares that trusted delivery is owned by
+the orchestrator:
+
+- implement the requested work;
+- add and run required tests;
+- inspect the final working tree;
+- do not commit;
+- do not push;
+- do not create a Pull Request;
+- do not modify Linear, including issue status;
+- never merge;
+- leave the validated changes in the assigned worktree.
+
+This explicit mode overrides the interactive delivery and Linear update steps
+above. It is not an instruction conflict requiring clarification.
+
+In orchestrated mode, the trusted deterministic host delivery layer independently
+validates the assigned worktree and runs quality gates, then owns commit, push,
+Pull Request creation and rediscovery. A successful Worker exit means only that
+implementation execution completed; it is not evidence of successful delivery.
+
+Report changed files, tests and limitations. Leave tracked and untracked changes
+recoverable in the assigned worktree for the host. Never perform delivery on
+behalf of another Worker.
+
+Never merge in either mode.
