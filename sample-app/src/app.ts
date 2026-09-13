@@ -5,8 +5,36 @@ import { requestLogging } from './request-logging.js';
 
 export const app = express();
 
+const metrics = {
+  totalRequests: 0,
+  serverErrors: 0,
+  healthRequests: 0,
+  readinessRequests: 0,
+};
+
 app.use(requestId);
 app.use(requestLogging());
+app.use((request, response, next) => {
+  response.once('finish', () => {
+    metrics.totalRequests += 1;
+
+    if (response.statusCode >= 500 && response.statusCode < 600) {
+      metrics.serverErrors += 1;
+    }
+    if (request.path === '/health') {
+      metrics.healthRequests += 1;
+    }
+    if (request.path === '/ready') {
+      metrics.readinessRequests += 1;
+    }
+  });
+
+  next();
+});
+
+app.get('/metrics', (_request, response) => {
+  response.json(metrics);
+});
 
 app.get('/', (_request, response) => {
   response.json({
