@@ -693,3 +693,16 @@ noncanonical roots, non-github.com remotes and ambiguous histories require human
 handling. Changes to staged source content inside validation fail closed. PR text
 identifies the ticket and automated validation but is generic; independent review must assess scope and
 behavior. No Worker/Reviewer retries, deployment, cleanup or automatic merge.
+
+### Merge reconciliation
+
+Supervision fetches the exact immutable PR identity saved by delivery or prior
+supervision. Branch discovery is used only when no identity has been persisted.
+After observing a human merge, trusted host code reconciles Linear completion.
+Set `LINEAR_DONE_STATE_ID` to a completed workflow state belonging to the issue's
+team, alongside `LINEAR_API_KEY`. Already completed issues need no mutation.
+
+The assignment remains `merged` if Linear synchronization fails. Its separate
+`linearSync` records `pending`, `failed`, or `synced`; rerun `supervise --run-id ID`
+to resume pending/failed synchronization. Successful syncs are not repeated.
+Closed but unmerged PRs never authorize completion. No runtime command merges PRs.

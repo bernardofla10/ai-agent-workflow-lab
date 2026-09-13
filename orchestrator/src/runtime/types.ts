@@ -82,6 +82,13 @@ export const workerAssignmentSchema = z.strictObject({
   workerResult: workerResultSchema.optional(),
   delivery: deliverySchema.optional(),
   supervision: supervisionSchema.optional(),
+  linearSync: z.strictObject({
+    status: z.enum(["pending", "synced", "failed"]),
+    issueId: z.string().min(1).optional(),
+    completedStateId: z.string().min(1).optional(),
+    syncedAt: z.iso.datetime().optional(),
+    error: z.string().min(1).optional(),
+  }).optional(),
   // Legacy review states cannot identify which head may already have run.
   reviewUncertain: z.literal(true).optional(),
 });

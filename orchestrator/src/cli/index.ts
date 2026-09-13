@@ -1,3 +1,4 @@
+import { LinearCompletionAdapter } from "../integrations/linear/completion-adapter.js";
 import { DeliveryExecutor } from "../delivery/delivery-executor.js";
 import { GitDelivery } from "../delivery/git-delivery.js";
 import { GitHubDeliveryAdapter } from "../delivery/github-delivery.js";
@@ -38,7 +39,9 @@ try {
     },
     supervise: (id) => {
       const repository = githubRepository();
-      return new Supervisor(store, new GitHubSupervisionAdapter(repository), new ReviewerRunner(root), repository).supervise(id);
+      return new Supervisor(store, new GitHubSupervisionAdapter(repository), new ReviewerRunner(root), repository, {
+        reconcile: (ticketId) => LinearCompletionAdapter.fromEnvironment().reconcile(ticketId),
+      }).supervise(id);
     },
     now: () => new Date(),
   });

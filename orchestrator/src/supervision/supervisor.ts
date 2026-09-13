@@ -1,10 +1,11 @@
+import type { LinearCompletion } from "../integrations/linear/completion-adapter.js";
 import type { PullRequestIdentity, PullRequestSnapshot, SupervisionGitHub } from "../integrations/github/supervision-adapter.js";
 import { StateStore } from "../runtime/state-store.js";
 import { baseCommitSchema, runIdSchema, type ExecutionRun, type ReviewAttempt, type WorkerAssignment } from "../runtime/types.js";
 import { validateReview, type Reviewer, type ReviewResult } from "./reviewer-runner.js";
 
 const supervisable = new Set(["worker_completed", "pr_open", "ci_pending", "ci_failed", "reviewing",
-  "changes_requested", "waiting_for_human"]);
+  "changes_requested", "waiting_for_human", "merged"]);
 
 function clearVerdict(assignment: WorkerAssignment): void {
   delete assignment.reviewerVerdict;
@@ -48,7 +49,8 @@ function applyVerdict(assignment: WorkerAssignment, verdict: ReviewResult["verdi
 
 export class Supervisor {
   constructor(private readonly store: StateStore, private readonly github: SupervisionGitHub,
-    private readonly reviewer: Reviewer, private readonly repository: string) {}
+    private readonly reviewer: Reviewer, private readonly repository: string,
+    private readonly linear?: LinearCompletion) {}
 
   async supervise(runId: string): Promise<ExecutionRun> {
     runIdSchema.parse(runId);
@@ -63,6 +65,7 @@ export class Supervisor {
         run = structuredClone(next);
       };
       for (const original of run.assignments) {
+        if (original.status === "merged" && original.linearSync?.status === "synced") continue;
         if (original.reviewUncertain || (original.delivery && original.delivery.phase !== "complete")) continue;
         if (!supervisable.has(original.status) && !(original.status === "blocked" &&
           (original.supervision || original.pullRequest || original.reviewerVerdict || original.workerResult?.exitCode === 0))) continue;
@@ -83,12 +86,20 @@ export class Supervisor {
           if (assignment.supervision?.identity && assignment.supervision.identity.repository !== this.repository) {
             throw new Error("Configured repository differs from persisted supervision identity");
           }
-          const matches = await this.github.discover(assignment.branch);
-          if (matches.length > 1) throw new Error("Ambiguous assignment PRs");
-          identity = matches[0];
+          const persisted = assignment.supervision?.identity;
+          const delivered = assignment.delivery?.pullRequest;
+          if (persisted) identity = { id: persisted.nodeId, number: persisted.pullRequest };
+          else if (delivered) identity = { id: delivered.nodeId, number: delivered.number };
+          else {
+            const matches = await this.github.discover(assignment.branch);
+            if (matches.length > 1) throw new Error("Ambiguous assignment PRs");
+            identity = matches[0];
+          }
           if (identity) pr = await this.inspect(identity, assignment);
         } catch {
-          block(assignment, "Unable to establish unambiguous current GitHub evidence");
+          if (original.status === "merged") {
+            assignment.linearSync = { status: "failed", error: "Unable to revalidate persisted GitHub merge for Linear sync" };
+          } else block(assignment, "Unable to establish unambiguous current GitHub evidence");
           await save(assignment);
           continue;
         }
@@ -106,8 +117,15 @@ export class Supervisor {
           clearVerdict(assignment);
           await save(assignment);
         }
+        if (original.status === "merged" && (pr.state !== "MERGED" ||
+          pr.mergedBy?.type !== "User" || !pr.mergedBy.login || !pr.mergedAt)) {
+          assignment.linearSync = { status: "failed", error: "Persisted GitHub merge could not be confirmed" };
+          await save(assignment);
+          continue;
+        }
         observe(assignment, pr);
         await save(assignment);
+        await this.reconcile(assignment, save);
         if (pr.state !== "OPEN" || pr.ci !== "success") continue;
         const evidence = assignment.supervision!;
         const prior = evidence.reviewAttempts.find((attempt) => attempt.headCommit === pr.headCommit);
@@ -148,9 +166,24 @@ export class Supervisor {
           attempt.state = "stale";
         } else applyVerdict(assignment, result.verdict);
         await save(assignment);
+        await this.reconcile(assignment, save);
       }
       return run;
     });
+  }
+
+  private async reconcile(assignment: WorkerAssignment, save: (assignment: WorkerAssignment) => Promise<void>): Promise<void> {
+    if (assignment.status !== "merged" || !assignment.supervision?.identity || assignment.linearSync?.status === "synced") return;
+    assignment.linearSync = { status: "pending" };
+    await save(assignment); // Durable intent; a crash after mutation retries by reading Linear first.
+    try {
+      if (!this.linear) throw new Error("Linear completion adapter is not configured");
+      const result = await this.linear.reconcile(assignment.ticketId);
+      assignment.linearSync = { status: "synced", ...result, syncedAt: new Date().toISOString() };
+    } catch {
+      assignment.linearSync = { status: "failed", error: "Linear completion sync failed; check credentials, LINEAR_DONE_STATE_ID, team and connectivity" };
+    }
+    await save(assignment);
   }
 
   private async inspect(identity: PullRequestIdentity, assignment: WorkerAssignment): Promise<PullRequestSnapshot> {
